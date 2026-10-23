@@ -1,0 +1,26 @@
+# entorno
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# datos y ejecuciones (no se suben: volúmenes de Amazon y resultados)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+runs/
+out/
+
+# configuración personal (ARN del MFA, perfiles de AWS…)
+config.local.json
+.env
+
+# sistema
+.DS_Store
+Thumbs.db
+~$*

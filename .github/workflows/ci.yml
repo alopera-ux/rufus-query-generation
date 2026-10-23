@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check --output-format=github src tests scripts
+      - name: Formato
+        run: uv run ruff format --check src tests scripts
+
+  pylint:
+    name: pylint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      # pyproject.toml: fail-under = 9.0 y fail-on = E,F (cualquier error rompe el check)
+      - name: Pylint (nota mínima 9.0, sin errores)
+        run: |
+          set -o pipefail
+          uv run pylint src tests scripts | tee pylint.txt
+      - name: Resumen
+        if: always()
+        run: |
+          echo "### Pylint" >> "$GITHUB_STEP_SUMMARY"
+          grep "rated at" pylint.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      # pyproject.toml: coverage fail_under = 85
+      - name: Pytest + coverage
+        run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Resumen
+        if: always()
+        run: |
+          echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
+          uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true

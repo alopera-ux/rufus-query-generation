@@ -1,0 +1,6 @@
+{
+  "aws": {
+    "profile": "shalion",
+    "mfa_serial": "arn:aws:iam::<ACCOUNT_ID>:mfa/<USER>"
+  }
+}
