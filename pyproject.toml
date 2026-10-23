@@ -1,0 +1,89 @@
+[project]
+name = "rufus-queries"
+version = "0.1.0"
+description = "Generación de preguntas para Rufus / Alexa for Shopping ponderadas por la demanda real de Amazon US"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "boto3>=1.35",
+]
+
+[project.scripts]
+rufus-run = "rufus_queries.run:main"
+rufus-app = "rufus_queries.app.main:serve"
+rufus-aws-login = "rufus_queries.tools.aws_login:main"
+rufus-check-bedrock = "rufus_queries.tools.check_bedrock:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "pylint>=3.3",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "httpx>=0.27",
+    "pre-commit>=4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rufus_queries"]
+
+# ── calidad ───────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PIE", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]   # textos en español con tildes, comillas tipográficas y "·"
+
+[tool.ruff.lint.isort]
+known-first-party = ["rufus_queries", "fakes"]
+
+[tool.ruff.lint.per-file-ignores]
+# plantillas HTML de la app: las líneas largas son marcado, no código
+"src/rufus_queries/app/main.py" = ["E501"]
+"src/rufus_queries/app/universe_svg.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# patrón estándar de FastAPI para parámetros de formulario
+extend-immutable-calls = ["fastapi.File", "fastapi.Form"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pylint.main]
+py-version = "3.11"
+jobs = 0
+fail-under = 9.0
+fail-on = ["E", "F"]   # cualquier error rompe el check aunque la nota pase de 9
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint."messages control"]
+# la longitud de línea ya la controla ruff (con la excepción de las plantillas HTML)
+disable = ["line-too-long"]
+
+# ── tests ─────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore:Using `httpx`"]
+
+[tool.coverage.run]
+source = ["rufus_queries"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85   # coverage actual ~87 %: CI falla si baja de 85 %

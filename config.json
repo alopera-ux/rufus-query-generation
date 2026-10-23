@@ -1,0 +1,126 @@
+{
+  "market": "Amazon US",
+  "inputs": {
+    "tree": "data/raw/us_2026-09.xlsx",
+    "keywords": "data/raw/amazon_us_volume.xlsx",
+    "volume_period": "2026-09",
+    "intents": "data/raw/shopper_assistant_intent_categories.xlsx"
+  },
+  "scope": {
+    "categories_regex": "^Grocery and gourmet food > Beverages$",
+    "exclude_sectors": [
+      "Tobacco and Smoking"
+    ]
+  },
+  "classify": {
+    "sample": null,
+    "batch_category": 250,
+    "batch_leaf": 150,
+    "examples_per_category": 8
+  },
+  "weight": {
+    "brand_line_needs": [
+      "diet",
+      "zero",
+      "zero sugar",
+      "sugar free",
+      "sugarfree",
+      "sugar-free"
+    ],
+    "brand_aliases": {
+      "coca cola": "coke",
+      "coca-cola": "coke",
+      "gatorlyte": "gatorade"
+    },
+    "anchor_min_share": 0.6
+  },
+  "focus": {
+    "threshold": 0.8,
+    "min_leaf_share": null,
+    "merge_siblings": {
+      "enabled": true,
+      "min_leaf_pct": 0.5,
+      "top_keywords": 10
+    }
+  },
+  "selection": {
+    "generic_as_intent": true,
+    "n_intents": 5,
+    "questions_per_intent": 5,
+    "questions_per_intent_override": {},
+    "exclude_intents": [
+      "I13"
+    ],
+    "cap_per_leaf_per_intent": 2,
+    "cap_per_leaf_in_set": 4,
+    "brand_bound": {
+      "max_brand_families": 1,
+      "min_nonbrand_share": 0.25
+    },
+    "brand_bound_skip_intents": [
+      "I07"
+    ],
+    "min_intent_keywords_per_leaf": 5,
+    "min_group_weight_pct": 0.1
+  },
+  "generation": {
+    "candidates_per_group": 3,
+    "min_words": 4,
+    "max_words": 12,
+    "banned_phrases": [
+      "on amazon",
+      "can i buy",
+      "show me",
+      "newest",
+      "latest",
+      "trending",
+      "viral"
+    ],
+    "max_same_structure": 2,
+    "diversity_tolerance": 0.5
+  },
+  "llm": {
+    "provider": "claude",
+    "workers": 8,
+    "region": "eu-west-1",
+    "models": {
+      "lite": "eu.amazon.nova-lite-v1:0",
+      "strong": "eu.amazon.nova-pro-v1:0"
+    },
+    "stage_models": {
+      "classify_category": "lite",
+      "classify_leaf": "lite",
+      "group": "strong",
+      "generate": "strong",
+      "judge": "strong",
+      "merge_siblings": "strong"
+    },
+    "temperature": {
+      "classify_category": 0.0,
+      "classify_leaf": 0.0,
+      "group": 0.0,
+      "generate": 0.7,
+      "judge": 0.0,
+      "merge_siblings": 0.0
+    },
+    "max_tokens": {
+      "classify_category": 6000,
+      "classify_leaf": 8000,
+      "group": 6000,
+      "generate": 4000,
+      "judge": 4000,
+      "merge_siblings": 1500
+    },
+    "prompt_cache": true,
+    "sleep_between_calls": 0.3,
+    "max_retries": 5
+  },
+  "aws": {
+    "profile": "shalion",
+    "role_arn": null,
+    "mfa_serial": null,
+    "session_seconds": 3600,
+    "session_profile": "shalion-session",
+    "session_hours": 12
+  }
+}
