@@ -11,6 +11,8 @@ Qué hace:
                     Nadie se lo salta, tampoco el admin.
        - "review":  PR con 1 aprobación de CODEOWNERS (@alopera-ux). El admin puede saltársela en sus propios PR,
                     porque GitHub no deja aprobar un PR propio.
+       - "branch-names": solo se pueden crear ramas <tipo>/<área>-<descripción> (ver BRANCH_TYPES y
+                    BRANCH_AREAS), p. ej. feat/prompts-versiones-preguntas. GitHub rechaza el push de cualquier otra.
 Las reglas en repos privados necesitan GitHub Pro (o una organización con plan Team): si GitHub lo rechaza,
 el script lo dice y el resto queda hecho; se pueden volver a aplicar luego con  --only-rules.
 """
@@ -28,7 +30,27 @@ DESCRIPTION = "Preguntas para Rufus / Alexa for Shopping ponderadas por la deman
 CHECKS = ["ruff", "pylint", "tests"]
 ROOT = Path(__file__).resolve().parent.parent
 
+# convención de nombres de rama: <tipo>/<área>-<descripción>
+BRANCH_TYPES = ["feat", "fix", "docs", "refactor", "test", "chore", "ci"]
+BRANCH_AREAS = ["pipeline", "prompts", "app", "bedrock", "infra", "docs"]
+
+
+def branch_patterns() -> list[str]:
+    """Patrones de rama permitidos (fnmatch, como los evalúa GitHub): refs/heads/<tipo>/<área>-*."""
+    return [f"refs/heads/{t}/{a}-*" for t in BRANCH_TYPES for a in BRANCH_AREAS]
+
+
 RULESETS = [
+    {
+        # GitHub Free no tiene la regla nativa de nombres de rama (solo Enterprise): se bloquea crear cualquier
+        # rama salvo las que siguen la convención (restrict creations con exclusiones)
+        "name": "branch-names",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH", *branch_patterns()]}},
+        "bypass_actors": [],
+        "rules": [{"type": "creation"}],
+    },
     {
         "name": "checks",
         "target": "branch",
@@ -168,6 +190,7 @@ def main(argv=None):
         ensure_repo()
     if apply_rules():
         print("Listo: main solo acepta PRs con ruff, pylint y tests en verde y tu aprobación.")
+        print("Ramas permitidas: <tipo>/<área>-<descripción>, p. ej. feat/prompts-versiones-preguntas.")
 
 
 if __name__ == "__main__":

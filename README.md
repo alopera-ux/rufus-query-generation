@@ -99,7 +99,28 @@ Deuda conocida: los `main()` de algunos pasos (s2, s3, s6) son largos; pylint lo
 
 ## Cómo contribuir
 
-1. Rama desde `main`: `git switch -c feature/lo-que-sea`.
+1. Rama desde `main` con el nombre `<tipo>/<área>-<descripción>`, por ejemplo `git switch -c feat/prompts-versiones-preguntas`. GitHub rechaza el push de ramas con otro nombre.
+
+   | Tipo | Para |
+   |---|---|
+   | `feat` | algo nuevo |
+   | `fix` | arreglar un error |
+   | `docs` | documentación |
+   | `refactor` | reorganizar código sin cambiar lo que hace |
+   | `test` | tests |
+   | `chore` | mantenimiento (dependencias, limpieza) |
+   | `ci` | integración continua |
+
+   | Área | Qué incluye |
+   |---|---|
+   | `pipeline` | los pasos s1–s9 y `lib/` |
+   | `prompts` | `src/rufus_queries/prompts/` |
+   | `app` | la app web |
+   | `bedrock` | AWS, Bedrock y sus herramientas |
+   | `infra` | repo, CI, uv, scripts |
+   | `docs` | README y `docs/` |
+
+   La descripción va en minúsculas y con guiones. La lista está en `scripts/setup_github.py` (`BRANCH_TYPES`, `BRANCH_AREAS`).
 2. Cambios con sus tests; `make check` en local.
 3. PR a `main`. Para hacer merge hacen falta los tres checks en verde y la aprobación de [@alopera-ux](https://github.com/alopera-ux), definida en CODEOWNERS.
 
