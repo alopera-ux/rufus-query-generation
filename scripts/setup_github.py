@@ -126,10 +126,25 @@ def ensure_repo():
     print(f"✓ repo creado: https://github.com/{full}")
 
 
+def _rules_failed(msg: str, name: str = "") -> bool:
+    """Explica por qué no se han podido poner las reglas: plan de GitHub o error concreto."""
+    if "Upgrade" in msg or "403" in msg or "not available" in msg.lower():
+        print(
+            "✗ GitHub no permite reglas en un repo privado con el plan Free.\n"
+            "  Opciones: GitHub Pro en tu cuenta, mover el repo a una organización con plan Team,\n"
+            "  o hacerlo público. Después:  uv run python scripts/setup_github.py --only-rules"
+        )
+        return False
+    sys.exit(f"Error con las reglas {name}: {msg}")
+
+
 def apply_rules() -> bool:
     """Crea o actualiza los rulesets de main. Devuelve False si el plan de GitHub no lo permite."""
     full = f"{OWNER}/{REPO}"
-    existing = {r["name"]: r["id"] for r in json.loads(sh("gh", "api", f"repos/{full}/rulesets").stdout or "[]")}
+    got = sh("gh", "api", f"repos/{full}/rulesets", check=False)
+    if got.returncode != 0:
+        return _rules_failed((got.stdout + got.stderr).strip())
+    existing = {r["name"]: r["id"] for r in json.loads(got.stdout or "[]")}
     for rs in RULESETS:
         if rs["name"] in existing:
             method, path = "PUT", f"repos/{full}/rulesets/{existing[rs['name']]}"
@@ -137,15 +152,7 @@ def apply_rules() -> bool:
             method, path = "POST", f"repos/{full}/rulesets"
         r = sh("gh", "api", "-X", method, path, "--input", "-", stdin=json.dumps(rs), check=False)
         if r.returncode != 0:
-            msg = (r.stdout + r.stderr).strip()
-            if "Upgrade" in msg or "403" in msg or "not available" in msg.lower():
-                print(
-                    "✗ GitHub no permite reglas en un repo privado con el plan Free.\n"
-                    "  Opciones: GitHub Pro en tu cuenta, mover el repo a una organización con plan Team,\n"
-                    "  o hacerlo público. Después:  uv run python scripts/setup_github.py --only-rules"
-                )
-                return False
-            sys.exit(f"Error creando el ruleset {rs['name']}: {msg}")
+            return _rules_failed((r.stdout + r.stderr).strip(), rs["name"])
         print(f"✓ ruleset '{rs['name']}'")
     return True
 
