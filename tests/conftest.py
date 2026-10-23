@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from rufus_queries import run
+from rufus_queries.lib import common
 from rufus_queries.steps import (
     s1_universe,
     s2_classify,
@@ -115,6 +116,12 @@ def _intents_xlsx(path):
     for n, phase, name, captures, signals in INTENTS:
         ws.append([n, phase, name, captures, signals, f"{name} q1", f"{name} q2", f"{name} q3"])
     wb.save(path)
+
+
+@pytest.fixture(autouse=True)
+def no_local_config(monkeypatch, tmp_path):
+    """Los tests no leen el config.local.json personal (AWS, MFA…) de quien los ejecuta."""
+    monkeypatch.setattr(common, "LOCAL_CONFIG", tmp_path / "no-local-config.json")
 
 
 @pytest.fixture(scope="session")

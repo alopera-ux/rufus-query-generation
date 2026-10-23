@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from rufus_queries.lib import common
-from rufus_queries.lib.common import Config, Out
+from rufus_queries.lib.common import Config, Out, chunks
 from rufus_queries.steps.s1_universe import build_nodes, load_tree
 from rufus_queries.steps.s2_classify import batched, category_nodes, load_keywords
 from rufus_queries.steps.s3_weight import brand_families
@@ -128,3 +128,9 @@ def test_out_reports_missing_step(tmp_path):
         out.read_csv("s0", "x.csv")
     with pytest.raises(FileNotFoundError):
         out.read_json("s0", "x.json")
+
+
+def test_chunks_even_and_bounded():
+    assert [len(c) for c in chunks(list(range(25)), 12)] == [9, 8, 8]
+    assert [len(c) for c in chunks(list(range(5)), 12)] == [5]
+    assert not chunks([], 12)
