@@ -1,137 +1,137 @@
 # rufus-query-generation
 
-Genera, para cada categoría de Amazon US, las preguntas que un comprador le haría a **Rufus / Alexa for Shopping**, elegidas y ponderadas por la demanda real (search volume de las keywords).
+For every Amazon US category, generates the questions a shopper would ask **Rufus / Alexa for Shopping**, chosen and weighted by real demand (keyword search volume).
 
-Salida por categoría: `final_questions.csv` y `results.xlsx`. Por defecto son 25 preguntas: los 5 intents con más demanda × 5 preguntas cada uno.
+Output per category: `final_questions.csv` and `results.xlsx`. By default each category gets 25 questions: the 5 intents with the most demand × 5 questions each.
 
-Diseño completo del método: [`docs/generacion_queries_rufus.md`](docs/generacion_queries_rufus.md).
+Full design of the method (in Spanish): [`docs/generacion_queries_rufus.md`](docs/generacion_queries_rufus.md).
 
-## Estructura
+## Structure
 
-Basada en [cookiecutter-data-science](https://cookiecutter-data-science.drivendata.org/), reducida a lo que usamos:
+Based on [cookiecutter-data-science](https://cookiecutter-data-science.drivendata.org/), trimmed to what we use:
 
 ```
-├─ .github/              CI (ruff, pylint, tests), CODEOWNERS, plantilla de PR
-├─ config.json           parámetros por defecto (alcance, foco, selección, IA, AWS sin datos personales)
-├─ config.local.example.json   plantilla de config.local.json (tus datos de AWS; no se sube)
+├─ .github/              CI (ruff, pylint, tests), CODEOWNERS, PR template
+├─ config.json           default parameters (scope, focus, selection, AI, AWS without personal data)
+├─ config.local.example.json   template for config.local.json (your AWS details; not committed)
 ├─ data/
-│  ├─ raw/               entradas: árbol, keywords con volumen, intents (no se suben)
-│  └─ processed/         reservado para salidas intermedias compartidas
-├─ docs/                 diseño del método
-├─ scripts/              setup_github.py (crear el repo y sus reglas)
+│  ├─ raw/               inputs: tree, keywords with volume, intents (not committed)
+│  └─ processed/         reserved for shared intermediate outputs
+├─ docs/                 design of the method
+├─ scripts/              setup_github.py (creates the repo and its rules)
 ├─ src/rufus_queries/
-│  ├─ steps/             s1…s9, un módulo por paso
-│  ├─ lib/               config, cliente de IA (bedrock / claude / mock), intents
-│  ├─ prompts/           instrucciones de cada paso con IA
-│  ├─ app/               app web (FastAPI) + assets (CSS/JS)
-│  ├─ tools/             aws_login y check_bedrock
-│  └─ run.py             orquestador
-├─ tests/                unitarios, app, IA con dobles de boto3 y pipeline completo en modo mock
-├─ runs/  · out/         ejecuciones (no se suben)
+│  ├─ steps/             s1…s9, one module per step
+│  ├─ lib/               config, AI client (bedrock / claude / mock), intents
+│  ├─ prompts/           instructions for each AI step
+│  ├─ app/               web app (FastAPI) + assets (CSS/JS)
+│  ├─ tools/             aws_login and check_bedrock
+│  └─ run.py             orchestrator
+├─ tests/                unit tests, app, AI with boto3 doubles and the full pipeline in mock mode
+├─ runs/  · out/         runs (not committed)
 └─ pyproject.toml · uv.lock
 ```
 
-## Instalación
+## Installation
 
-Requisitos: [uv](https://docs.astral.sh/uv/) (instala él mismo la versión de Python de `.python-version`).
-
-```bash
-uv sync                      # crea .venv con dependencias y herramientas de desarrollo
-```
-
-Copia los tres ficheros de entrada en `data/raw/` (los nombres están en `config.json → inputs`):
-
-| Entrada | Fichero | Contenido |
-|---|---|---|
-| Árbol | `us_2026-09.xlsx` | columna `breadcrumb` por hoja de Amazon US |
-| Keywords | `amazon_us_volume.xlsx` | keyword y volumen (top 200k del mes) |
-| Intents | `shopper_assistant_intent_categories.xlsx` | pestaña *Intent categories* con los 15 intents |
-
-## Uso
+Requirements: [uv](https://docs.astral.sh/uv/). It installs the Python version in `.python-version` by itself.
 
 ```bash
-uv run rufus-app                         # app web → http://localhost:8000  (--port 8001 si está ocupado)
-uv run rufus-run                         # los 9 pasos por línea de comandos
-uv run rufus-run --only 1                # un paso
-uv run rufus-run --from 3 --to 6         # un tramo
-uv run rufus-run --config mi.json --out out/prueba
+uv sync                      # creates .venv with dependencies and dev tools
 ```
 
-### Proveedores de IA (`llm.provider`)
+Copy the three input files into `data/raw/` (the file names are in `config.json → inputs`):
 
-- **`claude`** (manual): cada paso con IA deja sus prompts en `<out>/manual/pending/` y se para con código 3. Se responden en `<out>/manual/responses/<mismo nombre>.txt` y se continúa con `--from <paso>` o con el botón **Continuar** de la app.
-- **`bedrock`**: llamadas reales en paralelo (`llm.workers`, 8 por defecto). Ver más abajo.
-- **`mock`**: respuestas sintéticas para comprobar que todo funciona; es el que usan los tests.
-
-Todas las respuestas se guardan en caché (`<out>/cache/`): repetir un paso no repite llamadas.
-
-### Poner Bedrock en marcha
-
-1. **Permiso de IT**: `bedrock:InvokeModel` sobre los modelos de `llm.models` en `llm.region`. Por defecto son Nova Lite y Nova Pro en `eu-west-1`.
-2. **Claves permanentes**, solo en tu terminal: `aws configure --profile shalion`.
-3. **`config.local.json`**: copia `config.local.example.json` y pon el ARN de tu MFA.
-4. **Sesión con MFA**: `uv run rufus-aws-login`. Te pide el código de 1Password y guarda el perfil `shalion-session` durante 12 h. La cuenta deniega llamadas sin MFA.
-5. **Comprobar**: `uv run rufus-check-bedrock` hace una llamada mínima a cada modelo y muestra ✓ o ✗ con el motivo.
-6. **Lanzar**: en la app elige IA **Bedrock**, o pon `llm.provider: "bedrock"` en tu config.
-
-Coste orientativo para todas las categorías: unas 4.300 llamadas, unos 20 $ con Nova y entre 1 y 1,5 h con 8 workers.
-
-## Calidad y CI
-
-Cada PR y cada push a `main` pasan tres checks en GitHub Actions. Los tres son obligatorios para hacer merge.
-
-| Check | Qué exige | En local |
+| Input | File | Contents |
 |---|---|---|
-| `ruff` | lint y formato sin avisos | `uv run ruff check src tests scripts` · `uv run ruff format --check src tests scripts` |
-| `pylint` | nota ≥ 9.0 y ningún error (E/F) | `uv run pylint src tests scripts` |
-| `tests` | todos en verde y coverage ≥ 85 % | `uv run pytest --cov` |
+| Tree | `us_2026-09.xlsx` | `breadcrumb` column, one row per Amazon US leaf |
+| Keywords | `amazon_us_volume.xlsx` | keyword and volume (top 200k of the month) |
+| Intents | `shopper_assistant_intent_categories.xlsx` | *Intent categories* tab with the 15 intents |
 
-Con `make check` se ejecuta todo. Con `uv run pre-commit install` se pasan ruff y pylint antes de cada commit.
+## Usage
 
-Estado actual: pylint 9.84, 40 tests, coverage 87 %.
+```bash
+uv run rufus-app                         # web app → http://localhost:8000  (--port 8001 if it is busy)
+uv run rufus-run                         # all 9 steps from the command line
+uv run rufus-run --only 1                # one step
+uv run rufus-run --from 3 --to 6         # a range of steps
+uv run rufus-run --config my.json --out out/test
+```
 
-Excepciones explícitas, en `pyproject.toml`:
-- La longitud de línea no se mira en las plantillas HTML de la app.
-- `fastapi.File`/`Form` se aceptan como valores por defecto.
-- `invalid-name` se desactiva en las fórmulas de geometría del gráfico isométrico.
+### AI providers (`llm.provider`)
 
-Deuda conocida: los `main()` de algunos pasos (s2, s3, s6) son largos; pylint lo marca como `too-many-locals`/`too-many-statements`.
+- **`claude`** (manual): each AI step writes its prompts to `<out>/manual/pending/` and stops with exit code 3. Answers go in `<out>/manual/responses/<same name>.txt`; then continue with `--from <step>` or the **Continue** button in the app.
+- **`bedrock`**: real calls, in parallel (`llm.workers`, 8 by default). See below.
+- **`mock`**: synthetic answers to check that everything runs; the tests use it.
 
-## Cómo contribuir
+Every answer is cached (`<out>/cache/`): re-running a step does not repeat calls.
 
-1. Rama desde `main` con el nombre `<tipo>/<área>-<descripción>`, por ejemplo `git switch -c feat/prompts-versiones-preguntas`. GitHub rechaza el push de ramas con otro nombre.
+### Setting up Bedrock
 
-   | Tipo | Para |
+1. **IT permission**: `bedrock:InvokeModel` on the models in `llm.models`, in `llm.region`. By default these are Nova Lite and Nova Pro in `eu-west-1`.
+2. **Permanent keys**, only in your terminal: `aws configure --profile shalion`.
+3. **`config.local.json`**: copy `config.local.example.json` and add your MFA ARN.
+4. **MFA session**: `uv run rufus-aws-login`. It asks for the code from 1Password and saves the `shalion-session` profile for 12 h. The account denies calls without MFA.
+5. **Check**: `uv run rufus-check-bedrock` makes a minimal call to each model and shows ✓ or ✗ with the reason.
+6. **Run**: in the app choose AI **Bedrock**, or set `llm.provider: "bedrock"` in your config.
+
+Rough cost for all categories: about 5,600 calls, around $20 with Nova, and 1 to 1.5 h with 8 workers.
+
+## Quality and CI
+
+Every PR and every push to `main` runs three checks in GitHub Actions. All three must pass before merging.
+
+| Check | Requirement | Locally |
+|---|---|---|
+| `ruff` | lint and formatting with no warnings | `uv run ruff check src tests scripts` · `uv run ruff format --check src tests scripts` |
+| `pylint` | score ≥ 9.0 and no errors (E/F) | `uv run pylint src tests scripts` |
+| `tests` | all green and coverage ≥ 85% | `uv run pytest --cov` |
+
+`make check` runs everything. `uv run pre-commit install` runs ruff and pylint before each commit.
+
+Current status: pylint 9.85, 45 tests, coverage 87%.
+
+Explicit exceptions, in `pyproject.toml`:
+- Line length is not checked in the app's HTML templates.
+- `fastapi.File`/`Form` are allowed as default values.
+- `invalid-name` is disabled in the geometry formulas of the isometric chart.
+
+Known debt: the `main()` functions of some steps (s2, s3, s6) are long; pylint flags them as `too-many-locals`/`too-many-statements`.
+
+## Contributing
+
+1. Branch off `main` with the name `<type>/<area>-<description>`, for example `git switch -c feat/prompts-question-versions`. GitHub rejects the push of branches with any other name.
+
+   | Type | For |
    |---|---|
-   | `feat` | algo nuevo |
-   | `fix` | arreglar un error |
-   | `docs` | documentación |
-   | `refactor` | reorganizar código sin cambiar lo que hace |
+   | `feat` | something new |
+   | `fix` | fixing a bug |
+   | `docs` | documentation |
+   | `refactor` | restructuring code without changing what it does |
    | `test` | tests |
-   | `chore` | mantenimiento (dependencias, limpieza) |
-   | `ci` | integración continua |
+   | `chore` | maintenance (dependencies, cleanup) |
+   | `ci` | continuous integration |
 
-   | Área | Qué incluye |
+   | Area | What it covers |
    |---|---|
-   | `pipeline` | los pasos s1–s9 y `lib/` |
+   | `pipeline` | steps s1–s9 and `lib/` |
    | `prompts` | `src/rufus_queries/prompts/` |
-   | `app` | la app web |
-   | `bedrock` | AWS, Bedrock y sus herramientas |
+   | `app` | the web app |
+   | `bedrock` | AWS, Bedrock and their tools |
    | `infra` | repo, CI, uv, scripts |
-   | `docs` | README y `docs/` |
+   | `docs` | README and `docs/` |
 
-   La descripción va en minúsculas y con guiones. La lista está en `scripts/setup_github.py` (`BRANCH_TYPES`, `BRANCH_AREAS`).
-2. Cambios con sus tests; `make check` en local.
-3. PR a `main`. Para hacer merge hacen falta los tres checks en verde y la aprobación de [@alopera-ux](https://github.com/alopera-ux), definida en CODEOWNERS.
+   The description is lowercase, with hyphens. The lists live in `scripts/setup_github.py` (`BRANCH_TYPES`, `BRANCH_AREAS`).
+2. Make your changes with their tests; run `make check` locally.
+3. Open a PR to `main`. Merging needs the three checks green and approval from [@alopera-ux](https://github.com/alopera-ux), set in CODEOWNERS.
 
-El repo y sus reglas se crean con `scripts/setup_github.py`; los pasos están dentro del script.
+The repo and its rules are created with `scripts/setup_github.py`; the steps are described inside the script.
 
-## Limitaciones conocidas
+## Known limitations
 
-- Una categoría con una sola hoja se queda en 4 preguntas por el tope de 4 por hoja (`selection.cap_per_leaf_in_set`).
-- Las keywords sin intent claro (NX) no se reasignan.
-- Falta validar las preguntas en Rufus: qué responde y qué productos salen.
+- A category with a single leaf gets only 4 questions, because of the cap of 4 per leaf (`selection.cap_per_leaf_in_set`).
+- Keywords without a clear intent (NX) are not reassigned.
+- The questions still need to be validated in Rufus: what it answers and which products it shows.
 
-## Seguridad
+## Security
 
-Las claves de AWS y los `.ovpn` van solo en el terminal o en 1Password, nunca en el repo. `config.local.json`, `data/raw/` y `runs/` están en `.gitignore`.
+AWS keys and `.ovpn` files go only in the terminal or in 1Password, never in the repo. `config.local.json`, `data/raw/` and `runs/` are in `.gitignore`.
