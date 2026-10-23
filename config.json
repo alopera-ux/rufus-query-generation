@@ -64,7 +64,7 @@
     "min_group_weight_pct": 0.1
   },
   "generation": {
-    "candidates_per_group": 3,
+    "candidates_per_group": 6,
     "min_words": 4,
     "max_words": 12,
     "banned_phrases": [

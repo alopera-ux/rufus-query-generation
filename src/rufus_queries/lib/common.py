@@ -49,6 +49,20 @@ class Config(dict):
         return self["llm"]["models"].get(alias, alias)
 
 
+def chunks(items: list, size: int) -> list[list]:
+    """Parte items en trozos de tamaño parecido y como mucho `size` (25 en 12 → 9, 8, 8)."""
+    if not items:
+        return []
+    n = -(-len(items) // max(1, size))
+    k, r = divmod(len(items), n)
+    out, i = [], 0
+    for j in range(n):
+        m = k + (1 if j < r else 0)
+        out.append(items[i : i + m])
+        i += m
+    return out
+
+
 def step_args(description: str, argv=None) -> argparse.Namespace:
     """Argumentos comunes de cada paso: --config y --out."""
     ap = argparse.ArgumentParser(description=description)

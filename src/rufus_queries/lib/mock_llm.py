@@ -70,18 +70,24 @@ def _group(user):
     return "\n".join(f"{m.group(1)}|{m.group(2).strip()}" for m in re.finditer(r"(N\d{5}) \| ([^|]+) \|", user))
 
 
-def _generate(user):
+def _generate(system, user):
 
     briefs = json.loads(user[user.index("[") :])
     out = []
     for b in briefs:
         p, n = b["product"], b["need"]
+        np_ = f"{n + ' ' if n else ''}{p}"
         q = [
-            f"What's a good {n + ' ' if n else ''}{p}?",
-            f"Which {n + ' ' if n else ''}{p} should I get?",
-            f"What {n + ' ' if n else ''}{p} do you recommend?",
+            f"What's a good {np_}?",
+            f"Which {np_} should I get?",
+            f"What {np_} do you recommend?",
+            f"Can you recommend a {np_}?",
+            f"Looking for a {np_}, any suggestions?",
+            f"Is there a good {np_} to buy?",
         ]
-        out.append({"id": b["id"], "candidates": [{"s": s, "text": t} for s, t in zip("ABC", q, strict=False)]})
+        m = re.search(r"write (\d+) candidate", system)
+        q = q[: int(m.group(1)) if m else 3]
+        out.append({"id": b["id"], "candidates": [{"s": s, "text": t} for s, t in zip("ABCDEF", q, strict=False)]})
     return json.dumps(out)
 
 
@@ -102,7 +108,7 @@ def mock_respond(stage, system, user):
     if stage == "group":
         return _group(user)
     if stage == "generate":
-        return _generate(user)
+        return _generate(system, user)
     if stage == "judge":
         return _judge(user)
     if stage == "classify_category":

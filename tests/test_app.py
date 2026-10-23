@@ -51,6 +51,8 @@ def test_run_page_shows_questions_and_universe(client):
     assert r.status_code == 200
     assert "<svg" in r.text
     assert "coffee pods" in r.text.lower()
+    assert "6 versions" in r.text
+    assert "chosen" in r.text
     assert client.get("/runs/nope").status_code == 404
 
 

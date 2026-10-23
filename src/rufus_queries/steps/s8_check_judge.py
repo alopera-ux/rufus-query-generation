@@ -20,10 +20,11 @@ import sys
 
 import pandas as pd
 
-from rufus_queries.lib.common import PROMPTS, Config, Out, step_args
+from rufus_queries.lib.common import PROMPTS, Config, Out, chunks, step_args
 from rufus_queries.lib.llm import LLM, parse_json
 
 STEP = "s8_check_judge"
+BATCH = 12  # fichas por llamada al juez (cada una con hasta 6 versiones)
 STOP = {"a", "an", "the", "for", "of", "with", "and"}
 
 
@@ -98,7 +99,6 @@ def main(argv=None):
     system = (PROMPTS / "judge.md").read_text(encoding="utf-8")
     rnd = random.Random(11)
     key, scores = {}, {}
-    llm.expect(d.category.nunique(), "Blind judge scoring the candidates")
     jobs = []
     for cat, dc in d.groupby("category", sort=False):
         items = []
@@ -116,7 +116,8 @@ def main(argv=None):
                     "options": {str(j + 1): t for j, t in enumerate(opts)},
                 }
             )
-        jobs.append((cat, json.dumps(items, ensure_ascii=False, indent=1)))
+        jobs += [(cat, json.dumps(part, ensure_ascii=False, indent=1)) for part in chunks(items, BATCH)]
+    llm.expect(len(jobs), "Blind judge scoring the versions")
     raws = llm.map("judge", [(system, us) for _, us in jobs])  # en paralelo con Bedrock
     for (cat, _), raw in zip(jobs, raws, strict=False):
         for it in parse_json(raw) or []:
@@ -162,6 +163,7 @@ def main(argv=None):
                     "judge": round(pick.judge, 2),
                     "best_judge": round(best, 2),
                     "opening": pick.opening,
+                    "n_versions": len(g),
                     "reason": pick.reason,
                 }
             )

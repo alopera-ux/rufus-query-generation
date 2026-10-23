@@ -416,6 +416,7 @@ def show(rid: str):
         lwp, fop = d / "out" / "s3_weight" / "leaf_weights.csv", d / "out" / "s4_focus" / "focus.csv"
         lw = pd.read_csv(lwp, keep_default_na=False) if lwp.exists() else None
         fo = pd.read_csv(fop, keep_default_na=False) if fop.exists() else None
+        vers = versions_of(d)
         for cat, g in q.groupby("category", sort=False):
             mx = pd.to_numeric(g.weight_pct_category, errors="coerce").max() or 1
             mini = ""
@@ -433,7 +434,8 @@ def show(rid: str):
                 f"<tr class='qrow' data-cat='{E(cat)}' data-codes='{E(qcodes.get((cat, r.id), ''))}'>"
                 f"<td><span class='it {E(r.intent)}'>{E(r.intent_name)}</span></td><td>{E(r.unit)}"
                 f"{sib(why.get((cat, qcodes.get((cat, r.id), ''))))}</td>"
-                f"<td class='q'>{E(r.question)}</td><td style='white-space:nowrap'><span class='bar-w'>"
+                f"<td class='q'>{E(r.question)}{versions_html(vers.get((cat, r.id)), r.question)}</td>"
+                f"<td style='white-space:nowrap'><span class='bar-w'>"
                 f"<i style='width:{min(100, float(r.weight_pct_category) / mx * 100):.0f}%'></i></span>"
                 f"{float(r.weight_pct_category):.2f}%</td></tr>"
                 for r in g.itertuples()
@@ -523,6 +525,39 @@ def live(rid: str):
 def sib(reason):
     """Etiqueta 'siblings' con el motivo de la fusión (vacía si no hay)."""
     return f"<span class='sibchip' title='Merged siblings: {E(reason)}'>siblings</span>" if reason else ""
+
+
+def versions_of(d: Path) -> dict:
+    """{(categoría, id): [(texto, nota, ok, fallos), ...]} todas las versiones que vio el paso 8, mejor nota primero."""
+    p = d / "out" / "s8_check_judge" / "candidates_checked.csv"
+    if not p.exists():
+        return {}
+    c = pd.read_csv(p, keep_default_na=False)
+    c["judge"] = pd.to_numeric(c.judge, errors="coerce").fillna(0)
+    c["ok"] = c.ok.astype(str).str.lower() == "true"
+    c = c.sort_values(["ok", "judge"], ascending=[False, False])
+    return {
+        k: list(zip(g.text, g.judge, g.ok, g.fails, strict=True)) for k, g in c.groupby(["category", "id"], sort=False)
+    }
+
+
+def versions_html(vs, chosen: str, tol: float = 0.5) -> str:
+    """Desplegable con las demás versiones de una pregunta y por qué no se eligieron."""
+    if not vs or len(vs) < 2:
+        return ""
+    best = max((j for _, j, ok, _ in vs if ok), default=0)
+    items = []
+    for text, j, ok, fails in vs:
+        if text == chosen:
+            why, cls = "chosen", "on"
+        elif not ok:
+            why, cls = f"failed check: {fails}", "ko"
+        elif j < best - tol:
+            why, cls = "lower score", ""
+        else:
+            why, cls = "same opening already used", ""
+        items.append(f"<li class='{cls}'><span>{E(text)}</span><em>{j:.1f} · {E(why)}</em></li>")
+    return f"<details class='vers'><summary>{len(vs)} versions</summary><ul>{''.join(items)}</ul></details>"
 
 
 def merges_of(d: Path) -> dict:
