@@ -114,7 +114,7 @@ def main(argv=None):
     out.write_csv(STEP, "keywords.csv", use)
     for cat, g in needs.groupby("category"):
         print(f"[{STEP}] {cat}: {len(g)} necesidades → {g.group_id.nunique()} grupos en {g.unit_id.nunique()} unidades")
-    print(f"[{STEP}] LLM: {llm.stats}")
+    llm.report(STEP)
 
 
 if __name__ == "__main__":

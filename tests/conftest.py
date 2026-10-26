@@ -2,7 +2,9 @@
 # pylint: disable=redefined-outer-name  # así funcionan las fixtures de pytest
 
 import json
+import os
 import random
+import tempfile
 
 import openpyxl
 import pandas as pd
@@ -21,6 +23,9 @@ from rufus_queries.steps import (
     s8_check_judge,
     s9_output,
 )
+
+# la caché de IA compartida (llm.cache_dir) no se toca en los tests: cada sesión usa una carpeta temporal
+os.environ["RUFUS_CACHE_DIR"] = tempfile.mkdtemp(prefix="rufus-llm-cache-")
 
 TREE = [
     "Grocery and gourmet food > Beverages > Coffee > Single-serve capsules and pods",
@@ -92,6 +97,13 @@ INTENTS = [
     (15, "Decide", "Sustainability", "eco friendly", "recyclable"),
 ]
 
+# keyword → leaf principal y % en su categoría (como mapeo_kw_universo_share.csv); la última leaf no existe
+KEYWORD_LEAVES = [
+    ("Coffee  Pods", "Grocery and gourmet food > Beverages > Coffee > Single-serve capsules and pods", 50),
+    ("almonds", "Grocery and gourmet food > Snacks > Nuts > Almonds", 100),
+    ("soda", "Grocery and gourmet food > Beverages > Sodas that do not exist", 100),
+]
+
 
 def _keywords() -> pd.DataFrame:
     rnd = random.Random(7)
@@ -131,6 +143,9 @@ def inputs(tmp_path_factory):
     pd.DataFrame({"breadcrumb": ["Home > " + b for b in TREE]}).to_excel(d / "tree.xlsx", index=False)
     _keywords().to_csv(d / "keywords.csv", index=False)
     _intents_xlsx(d / "intents.xlsx")
+    pd.DataFrame(KEYWORD_LEAVES, columns=["KEYWORD", "TOP_LEAF", "CATEGORY_SHARE"]).to_csv(
+        d / "keyword_leaves.csv", index=False
+    )
     return d
 
 
@@ -142,9 +157,11 @@ def run_config(inputs, tmp_path_factory):
             "tree": str(inputs / "tree.xlsx"),
             "keywords": str(inputs / "keywords.csv"),
             "intents": str(inputs / "intents.xlsx"),
+            "keyword_leaves": str(inputs / "keyword_leaves.csv"),
         },
         "scope": {"categories_regex": "^Grocery and gourmet food > Beverages$"},
         "llm": {"provider": "mock", "sleep_between_calls": 0},
+        "classify": {"classify_unmapped": True, "weight_by_category_share": True},
         "selection": {"n_intents": 3, "questions_per_intent": 2},
     }
     p = tmp_path_factory.mktemp("cfg") / "config.json"

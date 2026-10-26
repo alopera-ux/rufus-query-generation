@@ -1,6 +1,8 @@
 """Cliente de IA: caché, modo manual (Claude), Bedrock con un cliente falso y lectura de JSON."""
 # pylint: disable=missing-function-docstring,redefined-outer-name  # tests de pytest: el nombre ya lo explica
 
+import time
+
 import pytest
 
 from fakes import FakeBedrock, client_error, fake_boto3
@@ -16,9 +18,10 @@ def make(tmp_path, provider, **llm_over):
 
 
 @pytest.fixture(autouse=True)
-def no_env(monkeypatch):
-    """Sin RUFUS_PROVIDER del entorno."""
+def no_env(monkeypatch, tmp_path):
+    """Sin RUFUS_PROVIDER del entorno y con una caché de IA propia de cada test."""
     monkeypatch.delenv("RUFUS_PROVIDER", raising=False)
+    monkeypatch.setenv("RUFUS_CACHE_DIR", str(tmp_path / "cache"))
 
 
 def test_parse_json_variants():
@@ -130,3 +133,78 @@ def test_bedrock_uses_session_profile_and_role(tmp_path, monkeypatch):
         }
     )
     assert LLM(cfg, tmp_path).call("judge", "s", "u") == "ok"
+
+
+def test_bedrock_prefers_role_profile(tmp_path, monkeypatch):
+    fake = FakeBedrock(["ok"])
+    boto = fake_boto3(fake, profiles=("shalion", "shalion-session", "shalion-rmm"))
+    monkeypatch.setattr(llm_mod, "boto3", boto)
+    cfg = Config.load(
+        overrides={
+            "llm": {"provider": "bedrock"},
+            "aws": {"session_profile": "shalion-session", "role_profile": "shalion-rmm"},
+        }
+    )
+    assert LLM(cfg, tmp_path).call("judge", "s", "u") == "ok"
+    assert {"profile_name": "shalion-rmm"} in boto.Session.created
+
+
+def test_bedrock_retries_without_temperature(tmp_path, monkeypatch):
+    fake = FakeBedrock([client_error("ValidationException", "`temperature` is deprecated for this model."), "ok"])
+    monkeypatch.setattr(llm_mod, "boto3", fake_boto3(fake))
+    llm = make(tmp_path, "bedrock")
+    assert llm.call("judge", "s", "u") == "ok"
+    assert "temperature" not in fake.calls[-1]["inferenceConfig"]
+
+
+def test_shared_cache_dir_from_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("RUFUS_CACHE_DIR")
+    cfg = Config.load(overrides={"llm": {"provider": "mock", "cache_dir": str(tmp_path / "shared")}})
+    a = LLM(cfg, tmp_path / "run1")
+    a.call("judge", "s", "[]")
+    b = LLM(cfg, tmp_path / "run2")
+    b.call("judge", "s", "[]")
+    assert b.stats["cached"] == 1  # la segunda ejecución reutiliza la respuesta de la primera
+
+
+def test_report_writes_usage_and_cost(tmp_path, monkeypatch, capsys):
+    fake = FakeBedrock(["ok"])
+    monkeypatch.setattr(llm_mod, "boto3", fake_boto3(fake))
+    llm = make(tmp_path, "bedrock", prices={"eu.anthropic.claude-sonnet-5-5": [1.0, 2.0]})
+    llm.call("judge", "s", "u")
+    llm.report("s8_check_judge")
+    usage = (tmp_path / "usage.csv").read_text(encoding="utf-8")
+    assert "s8_check_judge,eu.anthropic.claude-sonnet-5-5,1,10,2,0,0" in usage
+    assert "coste estimado" in capsys.readouterr().out
+
+
+def test_usage_cost_defaults_for_cache():
+    u = {
+        "calls": 1,
+        "input_tokens": 1_000_000,
+        "output_tokens": 0,
+        "cache_read_tokens": 1_000_000,
+        "cache_write_tokens": 0,
+    }
+    assert llm_mod.usage_cost("m", u, {"m": [1.0, 5.0]}) == 1.1
+    assert llm_mod.usage_cost("x", u, {}) is None
+
+
+class _NoTemperatureBedrock(FakeBedrock):  # pylint: disable=too-few-public-methods
+    """Como Claude Sonnet 5.5: rechaza cualquier llamada que lleve temperature (con un pequeño retardo)."""
+
+    def converse(self, **kw):
+        time.sleep(0.05)  # que las llamadas en paralelo salgan todas antes del primer error
+        if "temperature" in kw["inferenceConfig"]:
+            raise client_error("ValidationException", "`temperature` is deprecated for this model.")
+        return super().converse(**kw)
+
+
+def test_parallel_calls_all_retry_without_temperature(tmp_path, monkeypatch):
+    """Con varios hilos, todas las llamadas que salieron con temperature se repiten sin ella (antes solo la 1.ª)."""
+    fake = _NoTemperatureBedrock(["a", "b", "c", "d"])
+    monkeypatch.setattr(llm_mod, "boto3", fake_boto3(fake))
+    llm = make(tmp_path, "bedrock", workers=4)
+    out = llm.map("judge", [("s", str(i)) for i in range(4)])
+    assert sorted(out) == ["a", "b", "c", "d"]
+    assert llm.stats["failed"] == 0

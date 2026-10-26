@@ -3,7 +3,8 @@
     uv run rufus-check-bedrock
 
 Hace una llamada mínima (unos pocos tokens) a cada modelo de config.json → llm.models, en llm.region,
-con la identidad de aws.session_profile (o aws.profile). Muestra qué funciona y, si algo falla, por qué.
+con la misma identidad que el pipeline: aws.role_profile, si no aws.session_profile, si no aws.profile.
+Muestra qué funciona y, si algo falla, por qué.
 """
 
 import sys
@@ -15,12 +16,25 @@ from botocore.exceptions import BotoCoreError, ClientError
 from rufus_queries.lib.common import Config
 
 
+def _converse(br, model: str) -> dict:
+    """Llamada mínima; si el modelo no acepta temperature (p. ej. Claude Haiku 5.5), se repite sin ella."""
+    msg = [{"role": "user", "content": [{"text": "Reply with the word OK."}]}]
+    try:
+        return br.converse(modelId=model, messages=msg, inferenceConfig={"maxTokens": 5, "temperature": 0})
+    except ClientError as e:
+        if "temperature" not in str(e):
+            raise
+        return br.converse(modelId=model, messages=msg, inferenceConfig={"maxTokens": 5})
+
+
 def main():
     """Llamada mínima a cada modelo configurado; muestra qué funciona y por qué falla."""
     cfg = Config.load()
     aws, llm = cfg["aws"], cfg["llm"]
     profiles = boto3.Session().available_profiles
-    prof = aws.get("session_profile") if aws.get("session_profile") in profiles else aws.get("profile")
+    prof = next(
+        (p for p in (aws.get("role_profile"), aws.get("session_profile")) if p and p in profiles), aws.get("profile")
+    )
     print(f"Perfil: {prof} · región: {llm['region']}")
     sess = boto3.Session(profile_name=prof)
     try:
@@ -35,11 +49,7 @@ def main():
             continue
         t = time.time()
         try:
-            r = br.converse(
-                modelId=model,
-                messages=[{"role": "user", "content": [{"text": "Reply with the word OK."}]}],
-                inferenceConfig={"maxTokens": 5, "temperature": 0},
-            )
+            r = _converse(br, model)
             out = "".join(b.get("text", "") for b in r["output"]["message"]["content"]).strip()
             print(f"  ✓ {alias:7} {model}  → “{out}” en {time.time() - t:.1f}s")
         except ClientError as e:

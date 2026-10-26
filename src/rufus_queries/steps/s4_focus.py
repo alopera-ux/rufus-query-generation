@@ -172,7 +172,7 @@ def main(argv=None):
     out.write_csv(STEP, "focus.csv", pd.concat(focus_all))
     out.write_csv(STEP, "summary.csv", pd.DataFrame(summ))
     if llm:
-        print(f"[{STEP}] LLM: {llm.stats}")
+        llm.report(STEP)
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ def main(argv=None):
         f"[{STEP}] {len(result)} fichas · {n} candidatas"
         + (f" · {len(missing)} fichas sin candidatas: {missing[:5]}" if missing else "")
     )
-    print(f"[{STEP}] LLM: {llm.stats}")
+    llm.report(STEP)
 
 
 if __name__ == "__main__":

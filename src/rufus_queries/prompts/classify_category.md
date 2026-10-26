@@ -1,6 +1,7 @@
 You classify Amazon US search keywords into Amazon categories.
 
-Each category is "Sector > Category" from the Amazon US browse tree, followed by some of its sub-branches as examples.
+Each line is: category code | "Sector > Category" from the Amazon US browse tree | some of its sub-branches as examples.
+The code is the short name before the first "|" (for example: beverages, breads-and-bakery). Copy it exactly.
 
 CATEGORIES
 {categories}
@@ -16,5 +17,6 @@ OUTPUT
 One line per keyword, same order, no header, no other text:
 kid|category_code
 Example:
-K000012|C043
-K000013|XX
+K000012|skin-care
+K000013|beverages
+K000014|XX

@@ -1,4 +1,4 @@
-"""Capa LLM: Bedrock (Converse API, Nova y Claude), mock offline y modo manual, con caché en disco.
+"""Capa LLM: Bedrock (Converse API; por defecto Claude Sonnet 5.5), mock offline y modo manual, con caché en disco.
 
 - provider "bedrock": llama a Bedrock. Autenticación con perfil AWS + MFA, y opcionalmente
   asumiendo un rol en la cuenta de trabajo (role_arn).
@@ -27,6 +27,7 @@ import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
 
+from rufus_queries.lib.common import ROOT
 from rufus_queries.lib.mock_llm import mock_respond
 
 FATAL = {
@@ -40,6 +41,23 @@ FATAL = {
 }
 
 
+USAGE_KEYS = ("calls", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def usage_cost(model: str, u: dict, prices: dict) -> float | None:
+    """Coste estimado en $ con llm.prices[model] = [entrada, salida(, lectura caché, escritura caché)] por millón.
+    Sin 3.º/4.º valor: lectura de caché al 10 % y escritura al 125 % del precio de entrada."""
+    p = prices.get(model)
+    if not p:
+        return None
+    pin, pout = p[0], p[1]
+    pr = p[2] if len(p) > 2 else pin * 0.1
+    pw = p[3] if len(p) > 3 else pin * 1.25
+    return (
+        u["input_tokens"] * pin + u["output_tokens"] * pout + u["cache_read_tokens"] * pr + u["cache_write_tokens"] * pw
+    ) / 1e6
+
+
 class LLM:
     """Cliente de IA por etapas: Bedrock, Claude (manual) o mock, con caché en disco y llamadas en paralelo."""
 
@@ -47,7 +65,10 @@ class LLM:
         self.cfg = cfg
         self.provider = os.environ.get("RUFUS_PROVIDER") or cfg["llm"]["provider"]
         self.out = Path(out_dir)
-        self.cache_dir = self.out / "cache"
+        # caché compartida entre ejecuciones (llm.cache_dir): la clave es modelo + prompt, así que un mismo lote
+        # (p. ej. el paso 2a con el mismo fichero de keywords) no se vuelve a pagar en otra ejecución
+        cd = os.environ.get("RUFUS_CACHE_DIR") or cfg["llm"].get("cache_dir")
+        self.cache_dir = (Path(cd) if Path(str(cd)).is_absolute() else ROOT / cd) if cd else self.out / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict] = {}
         self.pending: list[str] = []
@@ -58,9 +79,12 @@ class LLM:
             "input_tokens": 0,
             "output_tokens": 0,
             "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
         }
+        self.usage: dict[str, dict] = {}  # por modelo: llamadas y tokens reales de Bedrock
         self._client = None
         self._use_cache_point = bool(cfg["llm"].get("prompt_cache", True))
+        self._no_temperature: set[str] = set()  # modelos que no aceptan temperature (p. ej. Claude Haiku 5.5)
         self._prog = {"label": "", "done": 0, "total": None, "started": time.time()}
         self._prog_w = 0.0
         self._lock = threading.RLock()  # caché, estadísticas y progreso se comparten entre hilos
@@ -87,6 +111,27 @@ class LLM:
         self._prog_w = now
         with contextlib.suppress(OSError):
             (self.out / "_progress.json").write_text(json.dumps({**self._prog, "updated": now}), encoding="utf-8")
+
+    def report(self, step: str):
+        """Imprime las estadísticas del paso y añade su consumo real (tokens y coste estimado) a <out>/usage.csv."""
+        print(f"[{step}] LLM: {self.stats}")
+        if not self.usage:
+            return
+        prices = self.cfg["llm"].get("prices", {})
+        rows, total = [], 0.0
+        for model, u in self.usage.items():
+            cost = usage_cost(model, u, prices)
+            total += cost or 0
+            rows.append({"step": step, "model": model, **u, "cost_usd": "" if cost is None else round(cost, 4)})
+        p = self.out / "usage.csv"
+        new = not p.exists()
+        with open(p, "a", encoding="utf-8") as fh:
+            if new:
+                fh.write(",".join(rows[0]) + "\n")
+            for r in rows:
+                fh.write(",".join(str(v) for v in r.values()) + "\n")
+        hit = self.stats["cache_read_tokens"] / max(1, self.stats["cache_read_tokens"] + self.stats["input_tokens"])
+        print(f"[{step}] coste estimado {total:.2f} $ · tokens de entrada leídos de la caché de prompts {hit:.0%}")
 
     # ── caché ───────────────────────────────────────────────────────────
     def _stage_cache(self, stage: str) -> dict:
@@ -212,9 +257,15 @@ class LLM:
     def _session(self):
 
         aws = self.cfg["aws"]
+        profiles = boto3.Session().available_profiles
+        # 0) rol del equipo en otra cuenta (perfil con role_arn + source_profile que escribe tools/aws_login.py):
+        #    botocore asume el rol con la sesión MFA y lo renueva solo, así que no caduca a mitad de ejecución
+        rp = aws.get("role_profile")
+        if rp and rp in profiles:
+            return boto3.Session(profile_name=rp)
         # 1) sesión temporal con MFA creada por tools/aws_login.py (lo normal: la app no puede pedir el código)
         sp = aws.get("session_profile")
-        if sp and sp in boto3.Session().available_profiles:
+        if sp and sp in profiles:
             base = boto3.Session(profile_name=sp)
             if aws.get("role_arn"):
                 c = base.client("sts").assume_role(
@@ -283,34 +334,56 @@ class LLM:
             raise SystemExit(
                 f"ERROR Bedrock {type(e).__name__}: {str(e)[:400]}\n"
                 "Stopping: the AWS profile/credentials could not be loaded on this computer. "
-                "Check aws.profile / aws.role_arn in config.json or log in to AWS, then click Retry."
+                "Run  uv run rufus-aws-login  (MFA code), check aws.profile / aws.role_profile, then click Retry."
             ) from None
         retries = int(self.cfg["llm"].get("max_retries", 5))
         for attempt in range(retries + 1):
+            # qué se envía en ESTA llamada: con varios hilos, otro puede haber cambiado los ajustes mientras tanto
+            sent_cache = self._use_cache_point
+            sent_temp = model not in self._no_temperature
             sys_blocks = [{"text": system}]
-            if self._use_cache_point:
+            if sent_cache:
                 sys_blocks.append({"cachePoint": {"type": "default"}})
             try:
                 r = client.converse(
                     modelId=model,
                     system=sys_blocks,
                     messages=[{"role": "user", "content": [{"text": user}]}],
-                    inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+                    inferenceConfig=(
+                        {"maxTokens": max_tokens, "temperature": temperature}
+                        if sent_temp
+                        else {"maxTokens": max_tokens}
+                    ),
                 )
                 u = r.get("usage", {})
                 with self._lock:
                     self.stats["input_tokens"] += u.get("inputTokens", 0)
                     self.stats["output_tokens"] += u.get("outputTokens", 0)
                     self.stats["cache_read_tokens"] += u.get("cacheReadInputTokens", 0)
+                    self.stats["cache_write_tokens"] += u.get("cacheWriteInputTokens", 0)
+                    mu = self.usage.setdefault(model, dict.fromkeys(USAGE_KEYS, 0))
+                    mu["calls"] += 1
+                    mu["input_tokens"] += u.get("inputTokens", 0)
+                    mu["output_tokens"] += u.get("outputTokens", 0)
+                    mu["cache_read_tokens"] += u.get("cacheReadInputTokens", 0)
+                    mu["cache_write_tokens"] += u.get("cacheWriteInputTokens", 0)
                 if r.get("stopReason") == "max_tokens":
                     print("    ⚠️  respuesta cortada por max_tokens")
                 return "".join(b.get("text", "") for b in r["output"]["message"]["content"])
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
                 msg = str(e)
-                if code == "ValidationException" and "cach" in msg.lower() and self._use_cache_point:
-                    print("    (este modelo no admite prompt caching; se desactiva)")
-                    self._use_cache_point = False
+                if code == "ValidationException" and "temperature" in msg and sent_temp:
+                    with self._lock:
+                        if model not in self._no_temperature:
+                            print(f"    ({model} no admite temperature; se envía sin ella)")
+                        self._no_temperature.add(model)
+                    continue
+                if code == "ValidationException" and "cach" in msg.lower() and sent_cache:
+                    with self._lock:
+                        if self._use_cache_point:
+                            print("    (este modelo no admite prompt caching; se desactiva)")
+                        self._use_cache_point = False
                     continue
                 transient = (
                     code

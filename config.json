@@ -2,9 +2,10 @@
   "market": "Amazon US",
   "inputs": {
     "tree": "data/raw/us_2026-09.xlsx",
-    "keywords": "data/raw/amazon_us_volume.xlsx",
+    "keywords": "data/raw/kw_univers_total.csv",
     "volume_period": "2026-09",
-    "intents": "data/raw/shopper_assistant_intent_categories.xlsx"
+    "intents": "data/raw/shopper_assistant_intent_categories.xlsx",
+    "keyword_leaves": "data/raw/kw_univers_total.csv"
   },
   "scope": {
     "categories_regex": "^Grocery and gourmet food > Beverages$",
@@ -16,7 +17,9 @@
     "sample": null,
     "batch_category": 250,
     "batch_leaf": 150,
-    "examples_per_category": 8
+    "examples_per_category": 8,
+    "classify_unmapped": false,
+    "weight_by_category_share": false
   },
   "weight": {
     "brand_line_needs": [
@@ -84,8 +87,8 @@
     "workers": 8,
     "region": "eu-west-1",
     "models": {
-      "lite": "eu.amazon.nova-lite-v1:0",
-      "strong": "eu.amazon.nova-pro-v1:0"
+      "lite": "eu.anthropic.claude-sonnet-5-5",
+      "strong": "eu.anthropic.claude-sonnet-5-5"
     },
     "stage_models": {
       "classify_category": "lite",
@@ -113,7 +116,38 @@
     },
     "prompt_cache": true,
     "sleep_between_calls": 0.3,
-    "max_retries": 5
+    "max_retries": 5,
+    "cache_dir": "data/processed/llm_cache",
+    "prices": {
+      "eu.amazon.nova-lite-v1:0": [
+        0.06,
+        0.24,
+        0.015,
+        0.06
+      ],
+      "eu.amazon.nova-pro-v1:0": [
+        0.8,
+        3.2,
+        0.2,
+        0.8
+      ],
+      "eu.anthropic.claude-haiku-4-5-20251001-v1:0": [
+        1.1,
+        5.5
+      ],
+      "eu.anthropic.claude-haiku-5-5": [
+        0.11,
+        0.55
+      ],
+      "eu.anthropic.claude-sonnet-5-5": [
+        2.2,
+        11.0
+      ],
+      "eu.anthropic.claude-opus-5-5": [
+        4.0,
+        20.0
+      ]
+    }
   },
   "aws": {
     "profile": "shalion",
@@ -121,6 +155,7 @@
     "mfa_serial": null,
     "session_seconds": 3600,
     "session_profile": "shalion-session",
-    "session_hours": 12
+    "session_hours": 12,
+    "role_profile": null
   }
 }
