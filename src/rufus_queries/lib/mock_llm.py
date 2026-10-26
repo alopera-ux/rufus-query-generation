@@ -27,11 +27,14 @@ def _toks(s):
 
 
 def _rows(user):
-    return re.findall(r"^(K\d+)\t(.+)$", user, re.M)
+    return re.findall(r"^(K\d+)\t([^\t\n]+)", user, re.M)
 
 
 def _classify_category(system, user):
-    cats = [(m.group(1), _toks(m.group(2))) for m in re.finditer(r"^(C\d{3}) \| (.+)$", system, re.M)]
+    cats = [
+        (m.group(1), _toks(m.group(2)))
+        for m in re.finditer(r"^([a-z0-9][a-z0-9-]*) \| (.+ \| e\.g\..*)$", system, re.M)
+    ]
     out = []
     for kid, kw in _rows(user):
         kt = _toks(kw)
@@ -45,7 +48,8 @@ def _classify_category(system, user):
 
 
 def _classify_leaf(system, user):
-    nodes = [(m.group(1), _toks(m.group(2))) for m in re.finditer(r"^([LP]\d+) \| (.+)$", system, re.M)]
+    nodes = [(m.group(1), _toks(m.group(2))) for m in re.finditer(r"^([a-z0-9][a-z0-9-]*) \| (.+)$", system, re.M)]
+    hints = dict(re.findall(r"^(K\d+)\t[^\t\n]+\t(\S+)$", user, re.M))
     out = []
     for kid, kw in _rows(user):
         kt = _toks(kw)
@@ -60,6 +64,7 @@ def _classify_leaf(system, user):
             if m:
                 intent, need = code, m.group(0)
                 break
+        best = hints.get(kid, best)
         if best == "NX":
             intent, need = "", ""
         out.append(f"{kid}|{best}|{intent}|{need}|")

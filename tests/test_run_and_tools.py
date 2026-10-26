@@ -28,6 +28,7 @@ def test_run_stops_with_code_3_in_claude_mode(run_config, pipeline_out, tmp_path
         for f in (pipeline_out / step).iterdir():
             (out / step / f.name).write_bytes(f.read_bytes())
     monkeypatch.delenv("RUFUS_PROVIDER", raising=False)
+    monkeypatch.setenv("RUFUS_CACHE_DIR", str(tmp_path / "cache"))  # sin las respuestas mock de otros tests
     with pytest.raises(SystemExit) as e:
         run.main(["--from", "7", "--config", str(p), "--out", str(out)])
     assert e.value.code == 3
@@ -86,3 +87,38 @@ def test_check_bedrock_ok_and_denied(monkeypatch, capsys):
         check_bedrock.main()
     assert e.value.code == 1
     assert "bedrock:InvokeModel" in capsys.readouterr().out
+
+
+def test_aws_login_writes_role_profile(aws_cfg, tmp_path, monkeypatch, capsys):
+    aws_cfg["aws"].update(role_arn="arn:aws:iam::1:role/team", role_profile="team-role")
+    (tmp_path / "config.json").write_text(json.dumps(aws_cfg))
+    monkeypatch.setattr(aws_login, "boto3", fake_boto3(FakeBedrock([])))
+    monkeypatch.setattr("builtins.input", lambda _p: "123456")
+    aws_login.main()
+    conf = (tmp_path / ".aws" / "config").read_text()
+    assert "[profile team-role]" in conf
+    assert "role_arn = arn:aws:iam::1:role/team" in conf
+    assert "source_profile = test-session" in conf
+    assert "rol 'team-role'" in capsys.readouterr().out
+
+
+def test_check_bedrock_uses_role_profile(aws_cfg, tmp_path, monkeypatch, capsys):
+    aws_cfg["aws"]["role_profile"] = "team-role"
+    (tmp_path / "config.json").write_text(json.dumps(aws_cfg))
+    boto = fake_boto3(FakeBedrock(["OK", "OK"]), profiles=("test-session", "team-role"))
+    monkeypatch.setattr(check_bedrock, "boto3", boto)
+    with pytest.raises(SystemExit) as e:
+        check_bedrock.main()
+    assert e.value.code == 0
+    assert "Perfil: team-role" in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("aws_cfg")
+def test_check_bedrock_retries_without_temperature(monkeypatch, capsys):
+    temp = client_error("ValidationException", "`temperature` is deprecated for this model.")
+    fake = FakeBedrock([temp, "OK", temp, "OK"])
+    monkeypatch.setattr(check_bedrock, "boto3", fake_boto3(fake, profiles=("test-session",)))
+    with pytest.raises(SystemExit) as e:
+        check_bedrock.main()
+    assert e.value.code == 0
+    assert "✓" in capsys.readouterr().out

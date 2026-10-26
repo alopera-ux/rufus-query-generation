@@ -1,6 +1,8 @@
 {
   "aws": {
     "profile": "shalion",
-    "mfa_serial": "arn:aws:iam::<ACCOUNT_ID>:mfa/<USER>"
+    "mfa_serial": "arn:aws:iam::<ACCOUNT_ID>:mfa/<DEVICE_NAME>",
+    "role_arn": "arn:aws:iam::<TEAM_ACCOUNT_ID>:role/<TEAM_ROLE>",
+    "role_profile": "shalion-rmm"
   }
 }

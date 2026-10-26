@@ -64,9 +64,11 @@ def fake_boto3(bedrock: FakeBedrock, profiles=("shalion",)):
         """Sesión con perfiles fijos."""
 
         available_profiles: ClassVar[list] = list(profiles)
+        created: ClassVar[list] = []  # kwargs de cada sesión creada, para comprobar qué perfil se usó
 
         def __init__(self, **kw):
             self.kw = kw
+            Session.created.append(kw)
 
         def client(self, name, **_kw):
             """Cliente sts o bedrock-runtime."""

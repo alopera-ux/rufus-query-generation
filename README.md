@@ -67,14 +67,14 @@ Every answer is cached (`<out>/cache/`): re-running a step does not repeat calls
 
 ### Setting up Bedrock
 
-1. **IT permission**: `bedrock:InvokeModel` on the models in `llm.models`, in `llm.region`. By default these are Nova Lite and Nova Pro in `eu-west-1`.
+1. **IT permission**: `bedrock:InvokeModel` on the models in `llm.models`, in `llm.region`, for the team role. By default every step uses Claude Sonnet 5.5 (`eu.anthropic.claude-sonnet-5-5`) in `eu-west-1`.
 2. **Permanent keys**, only in your terminal: `aws configure --profile shalion`.
-3. **`config.local.json`**: copy `config.local.example.json` and add your MFA ARN.
-4. **MFA session**: `uv run rufus-aws-login`. It asks for the code from 1Password and saves the `shalion-session` profile for 12 h. The account denies calls without MFA.
+3. **`config.local.json`**: copy `config.local.example.json` and add your MFA ARN and the team role. Bedrock lives in the team account, not in your user's account: your user only has `ReadOnlyAccess` plus permission to assume `shalion-rmm-team-role`.
+4. **MFA session**: `uv run rufus-aws-login`. It asks for the code from 1Password, saves the `shalion-session` profile for 12 h and writes the `shalion-rmm` profile, which assumes the team role from that session (renewed automatically). The account denies calls without MFA.
 5. **Check**: `uv run rufus-check-bedrock` makes a minimal call to each model and shows ✓ or ✗ with the reason.
 6. **Run**: in the app choose AI **Bedrock**, or set `llm.provider: "bedrock"` in your config.
 
-Rough cost for all categories: about 5,600 calls, around $20 with Nova, and 1 to 1.5 h with 8 workers.
+Rough cost with Sonnet 5.5 and `keyword_leaves`: about $1.5 per category (Beverages: $1.3–1.7, ~5 min with 24 workers), so roughly $200–250 for all categories. Each run writes the real cost to `<out>/usage.csv`.
 
 ## Quality and CI
 
@@ -88,7 +88,7 @@ Every PR and every push to `main` runs three checks in GitHub Actions. All three
 
 `make check` runs everything. `uv run pre-commit install` runs ruff and pylint before each commit.
 
-Current status: pylint 9.85, 45 tests, coverage 87%.
+Current status: pylint 9.85, 65 tests, coverage 88%.
 
 Explicit exceptions, in `pyproject.toml`:
 - Line length is not checked in the app's HTML templates.

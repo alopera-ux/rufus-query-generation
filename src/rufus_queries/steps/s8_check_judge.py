@@ -8,7 +8,9 @@ Salida  : out/s8_check_judge/
 Controles: contiene producto (palabra principal) y necesidad (alguna forma literal), sin marcas de la categoría,
 sin frases prohibidas, entre min_words y max_words, sin "it/this/these".
 Juez: otra llamada, opciones barajadas con semilla fija; puntúa 5 criterios de 1 a 5.
-Elección: la mejor nota entre las que pasan los controles; para que no salgan todas iguales, no se repite
+Elección: la mejor nota entre las que pasan los controles (si ninguna versión de una ficha los pasa, la mejor nota
+entre las que solo fallan producto/necesidad literal, marcada en reason; con marca, frase prohibida, longitud o
+referencia nunca); para que no salgan todas iguales, no se repite
 el mismo comienzo (dos primeras palabras) más de generation.max_same_structure veces en la categoría si hay
 otra candidata con nota a menos de generation.diversity_tolerance de la mejor.
 """
@@ -26,6 +28,15 @@ from rufus_queries.lib.llm import LLM, parse_json
 STEP = "s8_check_judge"
 BATCH = 12  # fichas por llamada al juez (cada una con hasta 6 versiones)
 STOP = {"a", "an", "the", "for", "of", "with", "and"}
+
+
+def fallback_pick(g: pd.DataFrame):
+    """Versión de una ficha sin ninguna válida: la de mejor nota entre las que solo fallan el control literal de
+    producto o necesidad (nunca marca, frase prohibida, longitud o referencia). None si no hay."""
+    g = g[g.fails.map(lambda f: set(str(f).split(";")) <= {"product", "need"})]
+    if g.empty:
+        return None
+    return g.assign(judge=g.judge.fillna(0)).sort_values(["judge", "words"], ascending=[False, True]).iloc[0]
 
 
 def has(term, text):
@@ -168,8 +179,26 @@ def main(argv=None):
                 }
             )
         lost = [i for i in d[d.category == cat].id.unique() if i not in set(dc.id)]
+        for i in lost:  # ninguna versión pasa: la mejor que solo falla producto/necesidad literal
+            g = d[(d.category == cat) & (d.id == i)]
+            pick = fallback_pick(g)
+            if pick is None:
+                continue
+            chosen.append(
+                {
+                    "category": cat,
+                    "id": i,
+                    "question": pick.text,
+                    "structure": pick.s,
+                    "judge": round(pick.judge, 2),
+                    "best_judge": round(pick.judge, 2),
+                    "opening": " ".join(pick.text.lower().split()[:2]),
+                    "n_versions": len(g),
+                    "reason": f"[sin control: {pick.fails}] {pick.reason}",
+                }
+            )
         if lost:
-            print(f"[{STEP}] ⚠️  {cat}: fichas sin candidata válida: {lost}")
+            print(f"[{STEP}] ⚠️  {cat}: fichas sin versión que pase los controles: {lost} (se usa la mejor nota)")
     ch = pd.DataFrame(chosen)
     out.write_csv(STEP, "chosen.csv", ch)
     for cat, g in ch.groupby("category"):
@@ -177,7 +206,7 @@ def main(argv=None):
             f"[{STEP}] {cat}: {len(g)} preguntas · controles {d[d.category == cat].ok.mean():.0%} ok · "
             f"nota media {g.judge.mean():.2f} · comienzos distintos {g.opening.nunique()}"
         )
-    print(f"[{STEP}] LLM: {llm.stats}")
+    llm.report(STEP)
 
 
 if __name__ == "__main__":
