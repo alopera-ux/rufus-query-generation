@@ -425,3 +425,45 @@ def test_product_is_not_a_two_type_label():
         "disinfectant spray",
         "unit_generic",
     )
+
+
+def test_quality_report_alerts(tmp_path):
+    from rufus_queries.lib import quality  # pylint: disable=import-outside-toplevel
+
+    o = tmp_path / "out"
+    for d in ("s9_output", "s6_select", "s4_focus"):
+        (o / d).mkdir(parents=True)
+    cat = "S > C"
+    pd.DataFrame(
+        {
+            "category": [cat] * 4,
+            "id": ["G-1", "G-2", "I05-1", "I05-2"],
+            "intent": ["G", "G", "I05", "I05"],
+            "intent_name": ["Generic", "Generic", "Attributes", "Attributes"],
+            "product": ["a", "b", "a", "a"],
+            "need": ["", "", "x", "y"],
+            "question": ["Q1?", "Q2?", "Q3?", ""],
+            "judge": [5, 3.5, 5, ""],
+            "weight_pct_category": [10, 5, 3, 1],
+        }
+    ).to_csv(o / "s9_output" / "final_questions.csv", index=False)
+    briefs = [{"category": cat, "unit_id": u} for u in ["U1", "U2", "U1", "U1"]]
+    (o / "s6_select" / "briefs.json").write_text(json.dumps(briefs), encoding="utf-8")
+    pd.DataFrame(
+        {"category": [cat] * 3, "unit_id": ["U1", "U2", "U3"], "unit_name": ["A", "B", "C"], "pct": [10, 30, 60]}
+    ).to_csv(o / "s4_focus" / "units.csv", index=False)
+    pd.DataFrame({"category": [cat] * 3, "intent": ["G", "I05", "I08"], "chosen": ["True", "True", "False"]}).to_csv(
+        o / "s6_select" / "intent_ranking.csv", index=False
+    )
+    pd.DataFrame(
+        {"category": [cat] * 2, "ok": [True, False], "fix": ["b | x", ""], "reason": ["corregida: why", "dup"]}
+    ).to_csv(o / "s6_select" / "review.csv", index=False)
+    pd.DataFrame({"step": ["s2"], "cost_usd": [1.5]}).to_csv(o / "usage.csv", index=False)
+    summ, al = quality.report(o, {"n_intents": 2, "questions_per_intent": 2})
+    checks = set(al.check)
+    assert summ.status.iloc[0] == "error" and summ.questions.iloc[0] == 3 and summ.target.iloc[0] == 4
+    assert {"Fewer questions than the target", "Brief without a question", "Intent below its quota"} <= checks
+    assert {"Low judge score", "High-demand leaf without a question", "Leaf with many questions"} <= checks
+    assert al.level.iloc[0] == "error" and quality.cost(o) == 1.5
+    assert list(quality.review(o).action) == ["fixed", "replaced"] and quality.review(o).reason.iloc[0] == "why"
+    assert quality.report(tmp_path / "none", {})[0].empty

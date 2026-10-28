@@ -185,14 +185,18 @@ def build_svg(
     if leg_m:
         leg_t += f"<h4>Merged siblings</h4>{leg_m}"
     nz = int((lw.total > 0).sum())
+    n_foc = len(focus_codes & set(lw.code))
+    all_in = n_foc >= nz  # sin foco del 80 % (desde oct-2026) cuentan todas las hojas con búsquedas
     stats = (
-        f"{n} leaves · {nz} with keywords · {len(focus_codes & set(lw.code))} in focus · "
-        f"{_fmt(lw.total.sum())} searches"
+        f"{n} leaves · {nz} with keywords"
+        + ("" if all_in else f" · {n_foc} in focus")
+        + f" · {_fmt(lw.total.sum())} searches"
     )
+    faded = "Faded: leaves without searches." if all_in else "Faded: outside the focus."
     return (
         f"<div class='uni' data-cat='{html.escape(cat_full or cat, quote=True)}'><div class='uni-chart'>{svg}"
         f"<p class='hint'>{stats}. Each cell is an Amazon leaf; bar height is its search volume. "
-        f"Faded: outside the focus. Hover a bar to see the leaf, click it to see its keywords.</p></div>"
+        f"{faded} Hover a bar to see the leaf, click it to see its keywords.</p></div>"
         f"<div class='uni-leg'><h4>Branches</h4>{leg_b}<h4>Top leaves by volume</h4>{leg_t}</div></div>"
     )
 

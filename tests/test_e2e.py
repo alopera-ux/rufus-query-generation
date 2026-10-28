@@ -16,6 +16,12 @@ def test_final_questions(pipeline_out):
     assert {"id", "intent", "question", "weight_pct_category", "volume"} <= set(fq.columns)
     assert fq.question.str.len().gt(0).all()
     assert (pipeline_out / "s9_output" / "results.xlsx").exists()
+    from openpyxl import load_workbook  # pylint: disable=import-outside-toplevel
+
+    sheets = load_workbook(pipeline_out / "s9_output" / "results.xlsx", read_only=True).sheetnames
+    assert {"Calidad", "Alertas", "Revisión IA", "Coste"} <= set(sheets)
+    qs = pd.read_csv(pipeline_out / "s9_output" / "quality_summary.csv")
+    assert set(qs.category) == set(fq.category) and set(qs.status) <= {"ok", "warning", "error"}
 
 
 def test_six_versions_per_question(pipeline_out):
