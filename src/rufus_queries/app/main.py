@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from rufus_queries.app import catmap
 from rufus_queries.app.assets import asset
 from rufus_queries.app.universe_svg import UNI_CSS, build_svg
+from rufus_queries.lib import quality
 from rufus_queries.lib.common import ROOT
 from rufus_queries.lib.intents import load_intents
 from rufus_queries.steps.s1_universe import load_tree
@@ -42,14 +43,14 @@ STEPS = [
     ("s1_universe", "Universe", "Amazon tree, flattened"),
     ("s2_classify", "Classify", "Keyword → category → leaf"),
     ("s3_weight", "Weight", "Search volume per leaf"),
-    ("s4_focus", "Focus", "Leaves with 80% of demand"),
+    ("s4_focus", "Units", "Leaves and merged siblings"),
     ("s5_groups", "Groups", "Same need, other words"),
-    ("s6_select", "Select", "Intents and briefs"),
-    ("s7_generate", "Generate", "3 candidates per brief"),
+    ("s6_select", "Select", "Intents, briefs, AI review"),
+    ("s7_generate", "Generate", "6 versions per brief"),
     ("s8_check_judge", "Judge", "Checks and choice"),
     ("s9_output", "Output", "Questions and Excel"),
 ]
-AI_STEPS = {"s2_classify", "s4_focus", "s5_groups", "s7_generate", "s8_check_judge"}
+AI_STEPS = {"s2_classify", "s4_focus", "s5_groups", "s6_select", "s7_generate", "s8_check_judge"}
 STATE_LABEL = {
     "starting": "Starting",
     "running": "Running",
@@ -138,6 +139,13 @@ def pill(state):
     return f"<span class='pill {E(state)}'>{STATE_LABEL.get(state, state)}</span>"
 
 
+def llm_label() -> str:
+    """Modelo por defecto de la configuración, legible ("Claude Sonnet 5.5")."""
+    mid = (DEFAULT.get("llm", {}).get("models") or {}).get("strong", "")
+    m = re.search(r"claude-([a-z]+)-(\d+)-(\d+)", mid)
+    return f"Claude {m.group(1).title()} {m.group(2)}.{m.group(3)}" if m else (mid or "Claude")
+
+
 def runs_list(limit=None):
     """Lista HTML de las ejecuciones, de la más reciente a la más antigua."""
     runs = [r for r in sorted(RUNS.iterdir(), reverse=True) if r.is_dir() and not r.name.startswith("_")]
@@ -189,7 +197,7 @@ def launch(rid, start=1):
 @app.get("/")
 def index():
     """Formulario de nueva ejecución."""
-    s, f = DEFAULT["selection"], DEFAULT["focus"]
+    s = DEFAULT["selection"]
     cur = DEFAULT["scope"].get("categories_regex") or ""
     opts = "".join(cat_row(c, bool(cur and re.search(cur, c))) for c in categories())
     inp = DEFAULT["inputs"]
@@ -235,18 +243,16 @@ def index():
 <div class="total" id="tot"></div>
 </div>
 
-<div class="card"><h2><span class="n">4</span>Run settings</h2><p class="desc">Demand focus and the AI that handles the language steps.</p>
-<div class="row">
-<div><label>Focus threshold</label><input type="number" step="0.01" min="0.5" max="1" name="threshold" value="{f["threshold"]}"></div>
-<div><label>Minimum per leaf (%)</label><input type="number" step="0.1" name="min_leaf_share" placeholder="optional"></div>
-<div><label>Keyword sample</label><input type="number" name="sample" placeholder="all"></div>
-</div>
+<div class="card"><h2><span class="n">4</span>Run settings</h2><p class="desc">The AI that handles the language steps. Every leaf of the category counts; an AI review fixes or replaces wrong briefs before the questions are written.</p>
 <label>AI</label>
 <div class="radios">
-<label class="radio"><input type="radio" name="provider" value="claude" checked><b>Claude</b><span>Pauses at each AI step until Claude answers. Without a sample it uses the 5,000 most searched keywords.</span></label>
+<label class="radio"><input type="radio" name="provider" value="bedrock" checked><b>Bedrock</b><span>{E(llm_label())} on AWS, about 1–4 $ per category. First run <code>uv run rufus-aws-login</code> in a terminal (MFA, lasts 12 h).</span></label>
+<label class="radio"><input type="radio" name="provider" value="claude"><b>Claude (manual)</b><span>Pauses at each AI step until Claude answers. Without a sample it uses the 5,000 most searched keywords.</span></label>
 <label class="radio"><input type="radio" name="provider" value="mock"><b>Test</b><span>Simulated answers to check that everything works. The questions are not meaningful.</span></label>
-<label class="radio"><input type="radio" name="provider" value="bedrock"><b>Bedrock</b><span>Real calls to AWS. First run <code>uv run rufus-aws-login</code> in a terminal (MFA, lasts 12 h).</span></label>
 </div>
+<details><summary>Advanced: keyword sample</summary>
+<input type="number" name="sample" placeholder="all keywords">
+<div class="hint">Only the N most searched keywords of each category, for a quick, cheaper test.</div></details>
 </div>
 
 <div class="submit"><button type="submit" class="btn primary">Launch run →</button></div>
@@ -308,10 +314,8 @@ async def run(
     questions_per_intent: int = Form(5),
     generic_as_intent: str = Form("1"),
     overrides: str = Form(""),
-    threshold: float = Form(1.0),
-    min_leaf_share: str = Form(""),
     sample: str = Form(""),
-    provider: str = Form("claude"),
+    provider: str = Form("bedrock"),
 ):
     """Crea una ejecución con los ficheros y parámetros del formulario y la lanza."""
     rx = categories_regex.strip().strip('"').strip("'").strip()
@@ -331,7 +335,6 @@ async def run(
             "generic_as_intent": generic_as_intent == "1",
             "questions_per_intent_override": {},
         },
-        "focus": {"threshold": threshold, "min_leaf_share": float(min_leaf_share) if min_leaf_share else None},
         "classify": {"sample": int(sample) if sample else None},
         "llm": {"provider": provider},
     }
@@ -403,11 +406,14 @@ def show(rid: str):
     if state == "done" and fq.exists():
         q = pd.read_csv(fq, keep_default_na=False)
         jm = pd.to_numeric(q.judge, errors="coerce").mean()
+        qsum, qal = quality_of(d)
+        worst = next((x for x in ("error", "warning") if x in set(qsum.status)), "ok")
         kpis = (
             f"<div class='kpis'><div class='kpi'><span>Questions</span><b>{len(q)}</b></div>"
             f"<div class='kpi'><span>Categories</span><b>{q.category.nunique()}</b></div>"
-            f"<div class='kpi'><span>Distinct intents</span><b>{q.intent.nunique()}</b></div>"
-            f"<div class='kpi'><span>Average judge score</span><b>{jm:.2f}</b></div></div>"
+            f"<div class='kpi'><span>Average judge score</span><b>{jm:.2f}</b></div>"
+            f"<div class='kpi'><span>Quality check</span><b class='qs {worst}'>{QS_LABEL[worst]}</b></div>"
+            f"<div class='kpi'><span>AI cost</span><b>{quality.cost(d / 'out'):.2f} $</b></div></div>"
         )
         tables = []
         badges, qcodes = question_links(d)
@@ -446,6 +452,7 @@ def show(rid: str):
             )
         results = (
             kpis
+            + quality_card(qsum, qal)
             + universe
             + intents_card(d)
             + "<div class='card'><div style='display:flex;align-items:center;gap:12px'>"
@@ -453,6 +460,13 @@ def show(rid: str):
             f"<a class='btn primary' href='/runs/{rid}/results.xlsx'>Download Excel</a></div>"
             + "".join(tables)
             + "<p class='hint'>Weight = share of the category's demand that each question represents.</p></div>"
+            + review_card(d)
+            + f"<div class='card rerun'><form method='post' action='/runs/{rid}/rerun' "
+            "onsubmit=\"return confirm('Re-run from step 6? It redoes the selection, the AI review, the questions and "
+            "the judge (about 0.2-0.3 $ per category). The current questions are replaced.')\">"
+            "<input type='hidden' name='step' value='6'><button class='btn ghost'>Re-run from step 6</button>"
+            "<span class='hint'>Selection, AI review, questions and judge again, with the current rules and prompts. "
+            "Steps 1-5 (classification and groups) are kept.</span></form></div>"
         )
 
     body = (
@@ -466,6 +480,86 @@ def show(rid: str):
         + LIVE_JS.replace("__RID__", rid).replace("__STATE__", state).replace("__SCOPE__", E(scope).replace("'", ""))
     )
     return page(scope, body, "runs")
+
+
+QS_LABEL = {"ok": "OK", "warning": "Check", "error": "Missing"}
+QS_HINT = {
+    "ok": "Nothing to check.",
+    "warning": "Worth a look: see the alerts.",
+    "error": "Questions are missing.",
+}
+
+
+def quality_of(d: Path):
+    """(resumen, alertas) del control de calidad: los del paso 9 si existen; si no, se calculan (runs antiguos)."""
+    o = d / "out" / "s9_output"
+    sp, ap = o / "quality_summary.csv", o / "quality_alerts.csv"
+    if sp.exists() and ap.exists():
+        return pd.read_csv(sp, keep_default_na=False), pd.read_csv(ap, keep_default_na=False)
+    try:
+        sel = json.loads((d / "config.json").read_text(encoding="utf-8")).get("selection", {})
+    except (OSError, ValueError):
+        sel = {}
+    return quality.report(d / "out", {**DEFAULT["selection"], **sel})
+
+
+def quality_card(qsum: pd.DataFrame, qal: pd.DataFrame) -> str:
+    """Semáforo por categoría y alertas que revisar."""
+    if qsum.empty:
+        return ""
+    rows = ""
+    for r in qsum.itertuples():
+        al = qal[qal.category == r.category] if len(qal) else qal
+        items = "".join(
+            f"<li class='{E(a.level)}'><b>{E(a.check)}</b> · {E(str(a.detail))}</li>" for a in al.itertuples()
+        )
+        rows += (
+            f"<div class='qc'><div class='qch'><span class='qs {E(r.status)}'>{QS_LABEL.get(r.status, r.status)}</span>"
+            f"<b>{E(r.category)}</b><span class='lv-muted'>{r.questions}/{r.target} questions · intents full "
+            f"{E(str(r.intents_full))} · judge {r.judge_mean} (min {r.judge_min}) · {r.weight_pct}% of demand · "
+            f"Gallagher {r.gallagher}</span></div>"
+            + (f"<ul class='qal'>{items}</ul>" if items else f"<p class='hint'>{QS_HINT['ok']}</p>")
+            + "</div>"
+        )
+    return (
+        "<div class='card'><h2 style='margin-bottom:4px'>Quality check</h2><p class='hint' style='margin:0 0 12px'>"
+        "Automatic checks so you only review what needs it. Red: questions missing. Amber: worth a look (an intent "
+        "that could not fill its slots, a leaf with demand for at least one question and none, a leaf with twice its "
+        "share and 2+ extra questions, a judge score below 4). Grey: what the AI review fixed or replaced. Gallagher: "
+        "gap between the demand of each leaf and its questions (0 = proportional).</p>" + rows + "</div>"
+    )
+
+
+def review_card(d: Path) -> str:
+    """Fichas que la revisión con IA corrigió (la pregunta usa el producto corregido) o sustituyó."""
+    rev = quality.review(d / "out")
+    if rev.empty:
+        return ""
+    multi = rev.category.nunique() > 1
+    fq = d / "out" / "s9_output" / "final_questions.csv"
+    names = {}
+    if fq.exists():
+        q = pd.read_csv(fq, keep_default_na=False)
+        names = dict(zip(q.intent, q.intent_name, strict=False))
+    rows = "".join(
+        f"<tr><td><span class='rv {E(r.action)}'>{'Fixed' if r.action == 'fixed' else 'Replaced'}</span></td>"
+        + (f"<td>{E(r.category.split(' > ')[-1])}</td>" if multi else "")
+        + f"<td><span class='it {E(str(r.intent))}'>{E(names.get(r.intent, str(r.intent)))}</span></td>"
+        f"<td>{E(str(r.product))} <span class='lv-muted'>|</span> {E(str(r.need))}</td>"
+        f"<td>{('→ ' + E(str(r.fix))) if r.action == 'fixed' else ''}</td><td class='why'>{E(str(r.reason))}</td>"
+        f"<td style='white-space:nowrap'>{float(r.weight_pct_category):.2f}%</td></tr>"
+        for r in rev.itertuples()
+    )
+    return (
+        "<div class='card'><h2 style='margin-bottom:4px'>AI review</h2><p class='hint' style='margin:0 0 12px'>"
+        "Before writing the questions, an AI reviewer checks every brief against its real keywords. Fixed: the "
+        "product is corrected with words from the keywords (the need is kept). Replaced: duplicates, redundant needs, "
+        "brands or nonsense go out and the next group of the same intent comes in.</p><table><tr><th>Action</th>"
+        + ("<th>Category</th>" if multi else "")
+        + "<th>Intent</th><th>Brief</th><th>Fix</th><th>Why</th><th>Weight</th></tr>"
+        + rows
+        + "</table></div>"
+    )
 
 
 def live_box(state):
@@ -821,6 +915,15 @@ def leaf_keywords(rid: str, cat: str, code: str, max_parents: int = 50):
 def resume(rid: str):
     """Relanza una ejecución desde el paso en el que se paró."""
     launch(rid, int(run_status(rid).get("step", 1)))
+    return RedirectResponse(f"/runs/{rid}", status_code=303)
+
+
+@app.post("/runs/{rid}/rerun")
+def rerun(rid: str, step: int = Form(6)):
+    """Relanza una ejecución terminada desde un paso (por defecto el 6: selección, revisión, preguntas y juez)."""
+    if not re.fullmatch(r"[\w-]+", rid) or not (RUNS / rid).is_dir() or not 1 <= step <= len(STEPS):
+        raise HTTPException(404)
+    launch(rid, step)
     return RedirectResponse(f"/runs/{rid}", status_code=303)
 
 

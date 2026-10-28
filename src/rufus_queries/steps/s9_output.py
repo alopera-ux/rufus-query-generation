@@ -3,7 +3,10 @@
 Entrada : s8_check_judge/{chosen,candidates_checked}.csv · s6_select/* · s4_focus/* · s3_weight/* · s2_classify/*
 Salida  : out/s9_output/
     final_questions.csv   una fila por pregunta: categoría, intent, unidad, producto, necesidad, pregunta, peso, volumen
-    results.xlsx          Resumen · Preguntas · Foco · Ranking intents · Grupos · Candidatas · Clasificación · Ajustes
+    quality_summary.csv   control de calidad por categoría (estado, cuota, juez, peso, revisión IA, Gallagher)
+    quality_alerts.csv    alertas que revisar (ver lib/quality.py)
+    results.xlsx          Resumen · Calidad · Alertas · Preguntas · Revisión IA · Coste · Foco · Ranking intents ·
+                          Grupos · Candidatas · Clasificación · Ajustes · Hojas juntadas
 """
 
 import pandas as pd
@@ -11,6 +14,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from rufus_queries.lib import quality
 from rufus_queries.lib.common import Config, Out, step_args
 
 STEP = "s9_output"
@@ -63,6 +67,13 @@ def main(argv=None):
     ]
     out.write_csv(STEP, "final_questions.csv", fin)
 
+    qsum, qal = quality.report(out.base, cfg.selection)
+    out.write_csv(STEP, "quality_summary.csv", qsum)
+    out.write_csv(STEP, "quality_alerts.csv", qal)
+    rev = quality.review(out.base)
+    usage = out.base / "usage.csv"
+    usage = pd.read_csv(usage) if usage.exists() else pd.DataFrame()
+
     units = out.read_csv("s4_focus", "units.csv")
     ranks = out.read_csv("s6_select", "intent_ranking.csv")
     groups = out.read_csv("s6_select", "groups_scored.csv")
@@ -78,30 +89,42 @@ def main(argv=None):
         ("Preguntas para Rufus / Alexa for Shopping", FT),
         (f"Keywords: {cfg['inputs']['keywords']} · periodo del volumen: {cfg['inputs'].get('volume_period', '?')}", F),
         (
-            f"Foco {cfg.focus.get('threshold')} · {cfg.selection.get('n_intents')} intents × "
-            f"{cfg.selection.get('questions_per_intent')} preguntas · "
-            f"G compite como intent: {cfg.selection.get('generic_as_intent')}",
+            f"{cfg.selection.get('n_intents')} intents × {cfg.selection.get('questions_per_intent')} preguntas · "
+            f"G compite como intent: {cfg.selection.get('generic_as_intent')} · "
+            f"revisión con IA: {'sí' if cfg.selection.get('review', True) else 'no'}",
             F,
         ),
-        (f"Proveedor IA: {cfg.llm.get('provider')}", F),
+        (f"Proveedor IA: {cfg.llm.get('provider')} · coste estimado {quality.cost(out.base):.2f} $", F),
         ("", F),
     ]
+    status = dict(zip(qsum.category, qsum.status, strict=False))
     for cat, g in fin.groupby("category"):
-        u = units[units.category == cat]
-        f = u[u.in_focus.astype(str).str.lower() == "true"]
         r = ranks[(ranks.category == cat) & ranks.chosen.astype(str).isin(["True", "filler"])]
+        n_al = (qal.category == cat) & qal.level.isin(["error", "warning"]) if len(qal) else []
         lines += [
             (cat, FB),
-            (f"  {len(f)} de {len(u)} unidades en el foco = {f.pct.astype(float).sum():.1f}% del volumen", F),
             ("  Intents: " + " · ".join(f"{x.intent} {x.intent_name} {x.share_pct}%" for x in r.itertuples()), F),
-            (f"  {g.question.notna().sum()} preguntas · nota media del juez {g.judge.mean():.2f}", F),
+            (
+                f"  {(g.question.fillna('').astype(str).str.strip() != '').sum()} preguntas · "
+                f"nota media del juez {pd.to_numeric(g.judge, errors='coerce').mean():.2f} · "
+                f"{pd.to_numeric(g.weight_pct_category, errors='coerce').sum():.1f}% de la demanda representada",
+                F,
+            ),
+            (f"  Control de calidad: {status.get(cat, '?')} · {int(sum(n_al))} alertas (hoja Alertas)", F),
             ("", F),
         ]
     for i, (t, f) in enumerate(lines, 1):
         ws.cell(row=i, column=1, value=t).font = f
     ws.column_dimensions["A"].width = 130
 
+    add_sheet(wb, "Calidad", qsum)
+    add_sheet(wb, "Alertas", qal)
     add_sheet(wb, "Preguntas", fin)
+    rcols = ["category", "round", "action", "intent", "unit", "product", "need", "fix", "reason", "weight_pct_category"]
+    add_sheet(
+        wb, "Revisión IA", rev[[c for c in rcols if c in rev.columns]] if len(rev) else pd.DataFrame(columns=rcols)
+    )
+    add_sheet(wb, "Coste", usage)
     add_sheet(wb, "Foco (unidades)", units)
     add_sheet(wb, "Ranking intents", ranks)
     add_sheet(wb, "Grupos", groups.drop(columns=[c for c in ["Index"] if c in groups.columns]))

@@ -4,6 +4,7 @@
 import json
 import shutil
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -66,8 +67,6 @@ def test_live_endpoint(client):
 
 
 def test_leaf_keywords(client, pipeline_out):
-    import pandas as pd  # pylint: disable=import-outside-toplevel
-
     lw = pd.read_csv(pipeline_out / "s3_weight" / "leaf_weights.csv", keep_default_na=False)
     row = lw[lw.total > 0].iloc[0]
     r = client.get(f"/runs/{RID}/leaf", params={"cat": row.category, "code": row.code})
@@ -124,3 +123,27 @@ def test_running_and_error_states(client):
     (app_main.RUNS / RID / "log.txt").write_text("ERROR Bedrock AccessDenied\nStopping: fix it\n", encoding="utf-8")
     r = client.get(f"/runs/{RID}")
     assert "Retry" in r.text
+
+
+def test_run_page_quality_review_and_rerun(client):
+    out = app_main.RUNS / RID / "out"
+    rev = pd.read_csv(out / "s6_select" / "review.csv", keep_default_na=False)
+    rev.loc[0, ["ok", "fix", "reason"]] = [True, "serum | korean", "corregida: keywords ask for serum"]
+    rev.loc[1, ["ok", "reason"]] = [False, "duplicate of another brief"]
+    rev.to_csv(out / "s6_select" / "review.csv", index=False)
+    r = client.get(f"/runs/{RID}")
+    assert "Quality check" in r.text and "AI cost" in r.text
+    assert "AI review" in r.text and "serum | korean" in r.text and "duplicate of another brief" in r.text
+    assert "corregida" not in r.text  # la acción ya dice que está corregida
+    assert "Re-run from step 6" in r.text
+    r = client.post(f"/runs/{RID}/rerun", data={"step": "6"}, follow_redirects=False)
+    assert r.status_code == 303 and client.launched[-1] == (RID, 6)
+    assert client.post("/runs/nope/rerun", data={"step": "6"}).status_code == 404
+
+
+def test_new_run_defaults_to_bedrock(client):
+    assert "Focus threshold" not in client.get("/").text
+    r = client.post("/run", data={"categories": ["Grocery and gourmet food > Beverages"]}, follow_redirects=False)
+    rid = r.headers["location"].rsplit("/", 1)[-1]
+    cfg = json.loads((app_main.RUNS / rid / "config.json").read_text(encoding="utf-8"))
+    assert cfg["llm"]["provider"] == "bedrock" and "focus" not in cfg

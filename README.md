@@ -2,7 +2,7 @@
 
 For every Amazon US category, generates the questions a shopper would ask **Rufus / Alexa for Shopping**, chosen and weighted by real demand (keyword search volume).
 
-Output per category: `final_questions.csv` and `results.xlsx`. By default each category gets 25 questions: the 5 intents with the most demand × 5 questions each.
+Output per category: `final_questions.csv` and `results.xlsx`. By default each category gets 25 questions: the 5 intents with the most demand × 5 questions each. Before the questions are written, an AI review fixes or replaces wrong briefs (`review.csv`), and step 9 adds a quality check per category (`quality_summary.csv`, `quality_alerts.csv`; *Calidad*, *Alertas*, *Revisión IA* and *Coste* sheets in the Excel; same checks on the run page of the app).
 
 Full design of the method (in Spanish): [`docs/generacion_queries_rufus.md`](docs/generacion_queries_rufus.md).
 
@@ -55,6 +55,8 @@ uv run rufus-run                         # all 9 steps from the command line
 uv run rufus-run --only 1                # one step
 uv run rufus-run --from 3 --to 6         # a range of steps
 uv run rufus-run --config my.json --out out/test
+uv run rufus-run --config runs/<id>/config.json --out runs/<id>/out --from 6   # redo selection, review, questions
+uv run rufus-run --config runs/<id>/config.json --out runs/<id>/out --only 9   # rebuild the Excel and checks (no AI)
 ```
 
 ### AI providers (`llm.provider`)

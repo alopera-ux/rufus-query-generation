@@ -116,7 +116,8 @@ def product_term(group_kw: pd.DataFrame, needs: list, unit_generic: pd.DataFrame
     said = sing(t for kw in group_kw.keyword for t in toks(kw))
     fw = toks(fallback)
     kept = sing(w for w in fw if sing([w]) <= said)
-    shorter = [gk for gk in generic if fw and sing(fw[-1:]) <= kept and sing(toks(gk)) == kept]
+    keeps_head = bool(fw) and sing(fw[-1:]) <= kept
+    shorter = [gk for gk in generic if keeps_head and sing(toks(gk)) == kept]
     if shorter and not sing(fw) <= said:
         fallback = " ".join(re.findall(r"[a-z0-9%]+", shorter[0].lower()))
     nb = group_kw[group_kw.brand == ""].sort_values("volume", ascending=False)
