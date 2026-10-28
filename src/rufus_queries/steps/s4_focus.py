@@ -1,4 +1,8 @@
-"""Paso 4 · Foco: por categoría, las hojas que suman el 80% del volumen (se compara solo dentro de la categoría).
+"""Paso 4 · Foco: por categoría, las unidades (hojas o hermanas juntadas) que entran en la selección.
+
+Por defecto focus.threshold = 1.0: entran todas las hojas con keywords y la selección (paso 6) decide por peso.
+Antes era 0.8 (las hojas del 80% del volumen), pero dejaba fuera grupos con más demanda que preguntas elegidas
+(p. ej. "headphones for school" 1,45% frente a preguntas de 0,10%). Se puede bajar para análisis.
 
 Entrada : s3_weight/leaf_weights.csv, classified_norm.csv · s2_classify/nodes_map.csv
 Salida  : out/s4_focus/
@@ -79,7 +83,7 @@ def main(argv=None):
     args = step_args(__doc__.splitlines()[0], argv)
     cfg, out = Config.load(args.config), Out(args.out)
     fc = cfg.get("focus", {})
-    th = float(fc.get("threshold", 0.8)) * 100
+    th = float(fc.get("threshold", 1.0)) * 100
     min_share = fc.get("min_leaf_share")
     mc = fc.get("merge_siblings", {"enabled": True})
     lw = out.read_csv("s3_weight", "leaf_weights.csv")

@@ -38,7 +38,7 @@
     "anchor_min_share": 0.6
   },
   "focus": {
-    "threshold": 0.8,
+    "threshold": 1.0,
     "min_leaf_share": null,
     "merge_siblings": {
       "enabled": true,
@@ -54,8 +54,6 @@
     "exclude_intents": [
       "I13"
     ],
-    "cap_per_leaf_per_intent": 2,
-    "cap_per_leaf_in_set": 4,
     "brand_bound": {
       "max_brand_families": 1,
       "min_nonbrand_share": 0.25
@@ -64,7 +62,8 @@
       "I07"
     ],
     "min_intent_keywords_per_leaf": 5,
-    "min_group_weight_pct": 0.1
+    "min_group_weight_pct": 0,
+    "review": true
   },
   "generation": {
     "candidates_per_group": 6,
@@ -96,7 +95,8 @@
       "group": "strong",
       "generate": "strong",
       "judge": "strong",
-      "merge_siblings": "strong"
+      "merge_siblings": "strong",
+      "review": "strong"
     },
     "temperature": {
       "classify_category": 0.0,
@@ -104,7 +104,8 @@
       "group": 0.0,
       "generate": 0.7,
       "judge": 0.0,
-      "merge_siblings": 0.0
+      "merge_siblings": 0.0,
+      "review": 0.0
     },
     "max_tokens": {
       "classify_category": 6000,
@@ -112,7 +113,8 @@
       "group": 6000,
       "generate": 4000,
       "judge": 4000,
-      "merge_siblings": 1500
+      "merge_siblings": 1500,
+      "review": 4000
     },
     "prompt_cache": true,
     "sleep_between_calls": 0.3,

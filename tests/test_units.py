@@ -21,7 +21,7 @@ from rufus_queries.steps.s2_classify import (
 )
 from rufus_queries.steps.s3_weight import brand_families
 from rufus_queries.steps.s4_focus import LeafKw, parse_merges
-from rufus_queries.steps.s6_select import fill_rest, near_dup, product_term, take_groups, toks
+from rufus_queries.steps.s6_select import fill_rest, mark_brands, near_dup, product_term, take_groups, toks
 from rufus_queries.steps.s8_check_judge import has
 
 
@@ -98,7 +98,8 @@ def test_take_groups_respects_caps():
     assert [r["group"] for r in state["sel"]] == ["g1", "g2", "g4"]
     # segunda llamada (turnos): el tope por hoja del intent se acumula → A ya tiene 2; de B solo cabe g5
     assert take_groups(cand, 5, ("cat", "I05"), state, (2, 9)) == 1
-    assert take_groups(cand, 5, ("cat", "I06"), state, (2, 9)) == 4  # otro intent: su propio tope, sin repetir
+    # otro intent: su propio tope, pero no repite una necesidad ya elegida en la misma hoja → solo queda g3
+    assert take_groups(cand, 5, ("cat", "I06"), state, (2, 9)) == 1
 
 
 def test_product_term_rules():
@@ -233,16 +234,31 @@ def test_final_code_with_known_leaf():
     assert fc("L1", "Bev > Coffee > Ground", path_of, code_of_path, "tea") == "L1"  # rama que no la contiene
 
 
-def test_fill_rest_ignores_leaf_caps():
+def test_fill_rest_ignores_leaf_caps_but_not_quotas():
     el = pd.DataFrame(
-        {"block": ["I07", "I05", "I07", "I01"], "group": ["a", "b", "c", "d"], "unit_id": ["A", "A", "A", "B"]}
+        {"block": ["I07", "I05", "I07", "I01", "I07"], "group": ["a", "b", "c", "d", "e"], "unit_id": list("AAABA")}
     )
     state = {"used": {"A": 4}, "picked": {("cat", "I05", "b", "A")}, "sel": []}
-    assert fill_rest(el, 2, "cat", state) == ["I07", "I07"]  # A ya tenía 4: se salta el tope; b ya elegido
-    assert [r["group"] for r in state["sel"]] == ["a", "c"]
-    assert fill_rest(el, 5, "cat", state) == ["I01"]  # solo queda d
+    room = {"I07": 2, "I01": 5}
+    assert fill_rest(el, 5, "cat", state, room) == ["I07", "I07", "I01"]  # A ya tenía 4: se salta el tope
+    assert [r["group"] for r in state["sel"]] == ["a", "c", "d"]  # e no: I07 ya llegó a su cuota
+    assert room == {"I07": 0, "I01": 4}
     state2 = {"used": {}, "picked": set(), "sel": []}
-    assert fill_rest(el, 1, "cat", state2, first=["I01"]) == ["I01"]  # antes el intent que no llegó a su cuota
+    assert fill_rest(el, 1, "cat", state2, {"I01": 1, "I07": 5}) == ["I01"]  # primero el primero de room
+
+
+def test_mark_brands_from_other_keywords():
+    kws = pd.DataFrame(
+        {
+            "category": ["C"] * 4,
+            "keyword": ["airpods", "apple airpods", "airpods pro case", "ear buds"],
+            "brand": ["", "airpods", "", ""],
+            "brand_family": ["", "apple", "", ""],
+        }
+    )
+    m = mark_brands(kws)
+    assert m.brand.tolist() == ["airpods", "airpods", "airpods", ""]
+    assert m.brand_family.tolist() == ["apple", "apple", "apple", ""]
 
 
 def test_near_dup():
@@ -266,3 +282,146 @@ def test_fallback_pick():
     )
     assert fallback_pick(g).text == "d e f g"  # mejor nota; la de marca nunca
     assert fallback_pick(g[g.fails.str.startswith("brand")]) is None
+
+
+def test_template_ignores_product_and_need():
+    from rufus_queries.steps.s8_check_judge import template  # pylint: disable=import-outside-toplevel
+
+    a = template("What body wash should I buy?", {"product": "body wash", "need": ""})
+    b = template("What vitamin c serum should I buy?", {"product": "serum", "need": "vitamin c"})
+    c = template("Looking for vitamin c serums, any suggestions?", {"product": "serum", "need": "vitamin c"})
+    assert a == b == "what should i buy"  # misma plantilla aunque empiecen distinto
+    assert c == "looking for any suggestions"
+
+
+def test_final_code_other_node_named_by_keyword():
+    path_of = {
+        "L1": "Audio > Headphones > Over-ear headphones",
+        "P2": "Audio > Headphones > Earbud headphones",
+        "L3": "Audio > Headphones > Earbud headphones > Sleep earbuds",
+    }
+    code_of_path = {v: k for k, v in path_of.items()}
+    leaf = "Audio > Headphones > Over-ear headphones"
+    fc = s2_classify.final_code
+    assert fc("P2", leaf, path_of, code_of_path, "wireless earbuds") == "P2"  # nombra el otro nodo
+    assert fc("P2", leaf, path_of, code_of_path, "ear buds") == "P2"  # "ear buds" → "earbud"
+    assert fc("P2", leaf, path_of, code_of_path, "airpods") == "L1"  # no lo nombra: manda Amazon
+    assert fc("L3", leaf, path_of, code_of_path, "over ear headphones") == "L1"
+
+
+def test_single_leaf_branch_is_one_unit():
+    from rufus_queries.steps.s3_weight import single_leaf_branches  # pylint: disable=import-outside-toplevel
+
+    nm = pd.DataFrame(
+        {
+            "category": ["C"] * 5,
+            "code": ["P1", "P2", "L1", "L2", "L3"],
+            "node_path": ["C > Head", "C > Head > Earbud", "C > Head > Earbud > Sleep", "C > Head > Over", "C > Case"],
+            "is_leaf": [False, False, True, True, True],
+        }
+    )
+    assert single_leaf_branches(nm) == {("C", "P2"): ("L1", "Earbud")}  # P1 tiene dos hojas
+
+
+def test_is_latin():
+    from rufus_queries.steps.s6_select import is_latin  # pylint: disable=import-outside-toplevel
+
+    assert is_latin("café au lait 12-pack")
+    assert not is_latin("耳机")
+    assert not is_latin("наушники")
+
+
+def test_product_term_named_or_top_generic_by_shared_words():
+    branded = pd.DataFrame({"keyword": ["gatorade powder"], "brand": ["gatorade"], "volume": [3]})
+    sports = pd.DataFrame({"keyword": ["pickle juice", "sports drinks"], "volume": [9, 2]})
+    assert product_term(branded, ["powder"], sports, "Sports drinks") == ("sports drinks", "unit_generic")  # empate
+    canned = pd.DataFrame({"keyword": ["canned", "wet cat food"], "volume": [1, 9]})
+    kitten = pd.DataFrame({"keyword": ["kitten wet food"], "brand": ["sheba"], "volume": [3]})
+    assert product_term(kitten, ["kitten"], canned, "Canned") == ("wet cat food", "unit_generic")
+    heads = pd.DataFrame({"keyword": ["on ear headphones", "\ufffcheadphones"], "volume": [9, 2]})
+    kids = pd.DataFrame({"keyword": ["wired headphones for kids"], "brand": [""], "volume": [3]})
+    assert product_term(kids, ["for kids"], heads, "On-ear headphones") == ("headphones", "unit_generic")
+    wand = pd.DataFrame({"keyword": ["toilet bowl cleaner"], "volume": [9]})
+    refills = pd.DataFrame({"keyword": ["toilet wand refills"], "brand": [""], "volume": [3]})
+    # sin palabras buscadas que formen otra genérica: se queda igual y lo mira la revisión con IA
+    assert product_term(refills, ["refills"], wand, "Toilet cleaners") == ("toilet bowl cleaner", "unit_generic")
+    drains = pd.DataFrame({"keyword": ["drain opener", "drain"], "volume": [9, 2]})
+    flies = pd.DataFrame({"keyword": ["fruit fly drain treatment"], "brand": [""], "volume": [3]})
+    assert product_term(flies, ["fruit fly"], drains, "Drain openers") == ("drain opener", "unit_generic")  # núcleo
+    serums = pd.DataFrame({"keyword": ["volufiline", "serum"], "volume": [9, 2]})
+    peptide = pd.DataFrame({"keyword": ["ghk-cu peptide serum"], "brand": ["x"], "volume": [3]})
+    assert product_term(peptide, ["ghk-cu peptide"], serums, "Serums") == ("serum", "unit_generic")
+
+
+def test_need_names_other_node():
+    from rufus_queries.steps.s6_select import need_names_other_node  # pylint: disable=import-outside-toplevel
+
+    cat = "Pets > Cats"
+    nm = pd.DataFrame(
+        {
+            "category": [cat] * 4,
+            "code": ["P1", "L1", "P2", "L2"],
+            "node_path": [f"{cat} > Wet", f"{cat} > Wet > Canned", f"{cat} > Dry", f"{cat} > Dry > Kibble"],
+        }
+    )
+    g = pd.DataFrame(
+        {
+            "category": [cat] * 4,
+            "unit_id": ["L1"] * 4,
+            "block": ["I05", "I05", "I05", "G"],
+            "group": ["dry", "wet", "pate", "dry"],
+        }
+    )
+    # "dry" nombra otro nodo; "wet" es su propia rama; "pate" no es ningún nodo; en G no se mira
+    assert need_names_other_node(g, nm).tolist() == [True, False, False, False]
+
+
+def test_product_without_need_and_same_need_across_intents():
+    towers = pd.DataFrame({"keyword": ["gaming pc", "desktop computer"], "volume": [9, 5]})
+    grp = pd.DataFrame({"keyword": ["gaming pc"], "brand": [""], "volume": [3]})
+    # "gaming pc" ya lleva la necesidad "gaming": la pregunta sería "gaming pc for gaming"
+    assert product_term(grp, ["gaming"], towers, "Towers") == ("desktop computer", "unit_generic")
+    picked = {("cat", "I04", "anti theft", "U1")}
+    assert near_dup(("cat", "I08"), "anti-theft", "U1", picked)  # misma necesidad en otro intent
+    assert not near_dup(("cat", "I08"), "anti-theft", "U2", picked)
+
+
+def test_review_fix_only_from_real_keywords():
+    from rufus_queries.steps.s6_select import fix_duplicates, valid_fix  # pylint: disable=import-outside-toplevel
+
+    b = {
+        "category": "c",
+        "intent": "I05",
+        "product": "skin care",
+        "need": "korean",
+        "top_keywords": ["korean serum", "korean skin care serums"],
+    }
+    assert valid_fix({"product": "Serum", "need": "korean"}, b) == {"product": "serum", "need": "korean"}
+    assert valid_fix({"product": "face cream", "need": "korean"}, b) is None  # "face cream" no sale en las keywords
+    assert valid_fix({"product": "serum", "need": ""}, b) is None  # fuera de G hace falta necesidad
+    assert valid_fix(None, b) is None
+    kit = {"intent": "I03", "need": "kitten", "literal_needs": ["kitten"], "top_keywords": ["dry kitten food"]}
+    assert valid_fix({"product": "kitten food", "need": "dry"}, kit) is None  # cambiaría de intent
+    assert valid_fix({"product": "food", "need": "kittens"}, kit) == {"product": "food", "need": "kittens"}
+    assert valid_fix({"product": "serum", "need": "korean"}, b | {"intent": "G"}) == {"product": "serum", "need": ""}
+    other = {"category": "c", "intent": "I05", "product": "Serum", "need": "korean"}
+    assert fix_duplicates({"product": "serum", "need": "korean"}, b, [b, other])
+    assert not fix_duplicates({"product": "serum", "need": "korean"}, b, [b, other | {"intent": "I06"}])
+
+
+def test_brand_used_as_product_name_is_allowed():
+    from rufus_queries.steps.s8_check_judge import brands_for  # pylint: disable=import-outside-toplevel
+
+    brands = ["stanley", "thermos"]
+    assert brands_for(brands, {"product": "food thermos", "need": "for hot food"}) == ["stanley"]
+    assert brands_for(brands, {"product": "lunch box", "need": "kids"}) == brands
+    assert brands_for(["owala"], {"product": "water bottle", "need": "owalas"}) == ["owala"]  # palabra completa
+
+
+def test_product_is_not_a_two_type_label():
+    gen = pd.DataFrame({"keyword": ["disinfectant sprays & liquids", "disinfectant spray"], "volume": [9, 5]})
+    grp = pd.DataFrame({"keyword": ["hypochlorous acid spray for home"], "brand": [""], "volume": [3]})
+    assert product_term(grp, ["for home"], gen, "Disinfectant sprays and liquids") == (
+        "disinfectant spray",
+        "unit_generic",
+    )

@@ -16,6 +16,10 @@ KEYWORDS
 One per line: kid<TAB>keyword, sometimes followed by <TAB>node code. That node is where Amazon shows most of the
 keyword's organic results: use it as code, with two exceptions:
 - a generic keyword that names a whole branch containing that node → that branch;
+- the keyword explicitly names the product of another node of this category → that node. Amazon sometimes lists
+  products under a node that is not theirs: "laptop sleeve" with a laptop backpacks node → the sleeves node;
+  "tablet stand" with a tablet cases node → the stands node. If the keyword does not name another node's
+  product, keep the given node;
 - the keyword itself names something that is not that node's product → NX. The node only says where most results
   are, so check what the keyword asks for: a raw food or ingredient is not the prepared product made from it, and a
   machine, container, tool or accessory is not the product used with it. Examples: "tomato" with a pasta sauce
@@ -37,7 +41,9 @@ RULES
      gluten free, bpa free) is Health, Safety & Ingredients, never Product Attributes.
    - Consistency: the same qualifier gets the same intent in every keyword, whatever the word order.
 3. need: the qualifier copied LITERALLY from the keyword (lowercase substring). Empty for G, N0 and NX.
-4. brand: the brand name if present (lowercase), else empty.
+4. brand: the brand name if present (lowercase), else empty. A product line or model name also has a brand, even
+   when the brand word is missing: "kindle" → amazon, "air jordan" → nike, "galaxy tab" → samsung, "xbox controller"
+   → microsoft. Misspellings of a brand or model are that brand too.
 
 OUTPUT
 One line per keyword, same order, no header, no other text:

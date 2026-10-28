@@ -116,6 +116,11 @@ def mock_respond(stage, system, user):
         return _generate(system, user)
     if stage == "judge":
         return _judge(user)
+    if stage == "review":
+        items = json.loads(user[user.index("[") :])
+        return json.dumps(
+            [{"id": it["id"], "ok": True, "reason": "", "fix": None} for it in items if not it.get("already_accepted")]
+        )
     if stage == "classify_category":
         return _classify_category(system, user)
     if stage == "classify_leaf":

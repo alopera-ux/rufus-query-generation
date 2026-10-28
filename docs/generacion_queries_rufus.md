@@ -336,8 +336,10 @@ Se reutiliza del repo antiguo la infraestructura (cliente Bedrock, modo mock, UI
 **Paso 6, nuevo diseño — agrupación dentro de la hoja**:
 1. En cada hoja del foco, agrupar las keywords que son **la misma búsqueda con otras palabras** (mismo producto + misma necesidad: orden, plurales, sinónimos, erratas). Si cambia la necesidad, es otro grupo ("sugar free" ≠ "low sugar"). Las keywords con marca suman peso; la pregunta va sin marca.
 2. Peso del grupo = **suma del search volume** de sus keywords.
-3. Por cada intent elegido: top 5 grupos por peso entre todas las hojas del foco, con tope por hoja (por intent y en el set de 25).
+3. Por cada intent elegido: top 5 grupos por peso entre todas las hojas de la categoría, por turnos entre intents. Desde oct-2026 sin foco del 80% ni topes por hoja: en Beverages, Skin care y Headphones ambos cambiaban grupos grandes por otros mucho más pequeños; ahora cada pregunta que cambia tiene más demanda que la que sustituye.
 4. La pregunta sale del propio grupo (producto + necesidad), con la estructura de su intent.
+5. Sin mínimo de peso por grupo (oct-2026): con 0,1% de la categoría, las categorías grandes y repartidas (Kitchen and dining, ~500 hojas) no llegaban a 5 grupos por intent.
+6. **Revisión con IA de las fichas** (`prompts/review.md`, `review.csv`), hasta 4 vueltas. Si el producto no es lo que buscan las keywords, contradice la necesidad, no se puede comprar o no está en inglés, el revisor **corrige el producto** con palabras de las keywords (la necesidad se mantiene: es la que pone la ficha en su intent); el código descarta la corrección si inventa palabras, cambia la necesidad o duplica otra ficha. Duplicados, fichas redundantes ("for kitchen" en Kitchen), marcas y necesidades sin sentido se **sustituyen** por el siguiente grupo. Validado en 8 categorías (Beverages, Skin care, Headphones, Cats, Women, Computers, Kitchen, Household): 25 preguntas y 5 por intent en todas, juez 4,9–5,0.
 
 **Por qué**: con el método actual (agrupar necesidades de toda la categoría) el peso no corresponde a la pregunta. Ejemplo del test: "Sugar free" juntó 139 keywords (36 energy drinks, 35 soft drinks, 33 juice, 20 drink mixes…) y la pregunta salió solo sobre water flavor packets; no hubo pregunta de sugar free soda.
 
