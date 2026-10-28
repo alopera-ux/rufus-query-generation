@@ -308,7 +308,7 @@ async def run(
     questions_per_intent: int = Form(5),
     generic_as_intent: str = Form("1"),
     overrides: str = Form(""),
-    threshold: float = Form(0.8),
+    threshold: float = Form(1.0),
     min_leaf_share: str = Form(""),
     sample: str = Form(""),
     provider: str = Form("claude"),

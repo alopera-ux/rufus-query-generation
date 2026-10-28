@@ -128,7 +128,6 @@ The repo and its rules are created with `scripts/setup_github.py`; the steps are
 
 ## Known limitations
 
-- A category with a single leaf gets only 4 questions, because of the cap of 4 per leaf (`selection.cap_per_leaf_in_set`).
 - Keywords without a clear intent (NX) are not reassigned.
 - The questions still need to be validated in Rufus: what it answers and which products it shows.
 

@@ -193,8 +193,8 @@ class LLM:
             return []
         if self.workers <= 1 or len(prompts) == 1:
             return [self.call(stage, sy, us, model_stage) for sy, us in prompts]
-        if self.provider == "bedrock":
-            self._bedrock_client()  # credenciales/MFA en el hilo principal, antes de abrir los hilos
+        if self.provider == "bedrock" and not self._all_cached(stage, prompts, model_stage):
+            self._client_or_exit()  # credenciales/MFA en el hilo principal, antes de abrir los hilos
         out = [None] * len(prompts)
         pool = ThreadPoolExecutor(max_workers=self.workers)
         futs = {pool.submit(self.call, stage, sy, us, model_stage): i for i, (sy, us) in enumerate(prompts)}
@@ -309,6 +309,29 @@ class LLM:
             )
         return base
 
+    def _all_cached(self, stage: str, prompts: list, model_stage: str | None) -> bool:
+        """True si todas las llamadas ya están en caché (entonces no hacen falta credenciales de AWS)."""
+        model = self.cfg.model_for(model_stage or stage)
+        temperature = self.cfg["llm"]["temperature"].get(stage, 0.3)
+        cache = self._stage_cache(stage)
+        return all(self.key(model, sy, us, temperature) in cache for sy, us in prompts)
+
+    def _client_or_exit(self):
+        """Cliente de Bedrock; si las credenciales no valen (sesión MFA caducada…), para con un mensaje claro."""
+        try:
+            return self._bedrock_client()
+        except (BotoCoreError, ClientError) as e:
+            expired = "ExpiredToken" in str(e) or "expired" in str(e).lower()
+            raise SystemExit(
+                f"ERROR Bedrock {type(e).__name__}: {str(e)[:400]}\n"
+                + (
+                    "Stopping: the AWS MFA session has expired (it lasts 12 h). "
+                    if expired
+                    else "Stopping: the AWS profile/credentials could not be loaded on this computer. "
+                )
+                + "Run  uv run rufus-aws-login  (MFA code), check aws.profile / aws.role_profile, then click Retry."
+            ) from None
+
     def _bedrock_client(self):
         if self._client is None:
             sess = self._session()
@@ -328,14 +351,7 @@ class LLM:
 
     def _bedrock(self, model, system, user, temperature, max_tokens):
 
-        try:
-            client = self._bedrock_client()
-        except (BotoCoreError, ClientError) as e:
-            raise SystemExit(
-                f"ERROR Bedrock {type(e).__name__}: {str(e)[:400]}\n"
-                "Stopping: the AWS profile/credentials could not be loaded on this computer. "
-                "Run  uv run rufus-aws-login  (MFA code), check aws.profile / aws.role_profile, then click Retry."
-            ) from None
+        client = self._client_or_exit()
         retries = int(self.cfg["llm"].get("max_retries", 5))
         for attempt in range(retries + 1):
             # qué se envía en ESTA llamada: con varios hilos, otro puede haber cambiado los ajustes mientras tanto
@@ -430,7 +446,8 @@ class LLM:
 
 
 def parse_json(raw: str | None):
-    """Extrae el primer JSON (array u objeto) de la respuesta, tolerando ```json``` y texto alrededor."""
+    """Extrae el primer JSON (array u objeto) de la respuesta, tolerando ```json```, texto alrededor y, en un
+    array, objetos mal cerrados (se rescatan los que estén bien)."""
     if not raw:
         return None
     s = raw.strip()
@@ -446,4 +463,22 @@ def parse_json(raw: str | None):
                 return json.loads(s[i : j + 1])
             except json.JSONDecodeError:
                 continue
+    if s.find("[") != -1 and s.find("[") < s.find("{"):
+        return salvage_objects(s) or None
     return None
+
+
+def salvage_objects(s: str) -> list:
+    """Objetos válidos de un array JSON mal cerrado: el modelo a veces escribe una llave de más ("}}}},") y se
+    perdía el lote entero. Lee cada objeto completo y salta lo que sobra hasta el siguiente."""
+    dec, out, i = json.JSONDecoder(), [], s.find("{")
+    while i != -1:
+        try:
+            obj, end = dec.raw_decode(s, i)
+        except json.JSONDecodeError:
+            i = s.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+        i = s.find("{", end)
+    return out

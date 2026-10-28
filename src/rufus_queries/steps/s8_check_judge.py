@@ -8,6 +8,9 @@ Salida  : out/s8_check_judge/
 Controles: contiene producto (palabra principal) y necesidad (alguna forma literal), sin marcas de la categoría,
 sin frases prohibidas, entre min_words y max_words, sin "it/this/these".
 Juez: otra llamada, opciones barajadas con semilla fija; puntúa 5 criterios de 1 a 5.
+Variedad: se mide sobre la plantilla de la pregunta (el texto sin las palabras del producto ni de la necesidad):
+"What body wash should I buy?" y "What vitamin c serum should I buy?" son la misma plantilla "what should i buy",
+aunque empiecen distinto. Antes se miraban las dos primeras palabras y el producto las hacía parecer distintas.
 Elección: la mejor nota entre las que pasan los controles (si ninguna versión de una ficha los pasa, la mejor nota
 entre las que solo fallan producto/necesidad literal, marcada en reason; con marca, frase prohibida, longitud o
 referencia nunca); para que no salgan todas iguales, no se repite
@@ -28,6 +31,27 @@ from rufus_queries.lib.llm import LLM, parse_json
 STEP = "s8_check_judge"
 BATCH = 12  # fichas por llamada al juez (cada una con hasta 6 versiones)
 STOP = {"a", "an", "the", "for", "of", "with", "and"}
+
+
+def template(text: str, brief: dict) -> str:
+    """Plantilla de una pregunta: sus palabras sin las del producto, la necesidad ni sus formas literales."""
+    words = set()
+    for t in [brief.get("product", ""), brief.get("need", ""), *brief.get("literal_needs", [])]:
+        for w in re.findall(r"[a-z0-9%]+", str(t).lower()):
+            words |= {w, w + "s", w + "es", w[:-1] if w.endswith("s") else w}
+    return " ".join(w for w in re.findall(r"[a-z0-9%']+", text.lower()) if w not in words)
+
+
+def word_in(w: str, text: str) -> bool:
+    """¿Aparece w como palabra (o expresión) completa en text?"""
+    return re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", text) is not None
+
+
+def brands_for(brands: list, brief: dict) -> list:
+    """Marcas que no puede mencionar la pregunta de una ficha. Una marca que forma parte de su producto o necesidad se
+    usa ahí como nombre común ("food thermos"): el paso 6 eligió ese término de keywords sin marca."""
+    own = f"{brief['product']} {brief['need']}".lower()
+    return [w for w in brands if not word_in(w, own)]
 
 
 def fallback_pick(g: pd.DataFrame):
@@ -74,6 +98,7 @@ def main(argv=None):
         brands = brands_of.get(c["category"], [])
         head = b["product"].split()[-1] if b["product"] else ""
         needs = [b["need"], *b.get("literal_needs", [])] if b["need"] else []
+        brands_b = brands_for(brands, b)
         for x in c["candidates"]:
             t = " " + x["text"].lower() + " "
             fails = []
@@ -82,7 +107,7 @@ def main(argv=None):
             if needs and not any(has(n, t) for n in needs if n):
                 fails.append("need")
             if b["intent"] != "I07":
-                hit = next((w for w in brands if re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", t)), None)
+                hit = next((w for w in brands_b if word_in(w, t)), None)
                 if hit:
                     fails.append(f"brand:{hit}")
             if any(p in t for p in banned) or re.search(r"\b20\d\d\b", t):
@@ -109,7 +134,7 @@ def main(argv=None):
     # ── juez a ciegas ───────────────────────────────────────────────────
     system = (PROMPTS / "judge.md").read_text(encoding="utf-8")
     rnd = random.Random(11)
-    key, scores = {}, {}
+    key, scores, item_of = {}, {}, {}
     jobs = []
     for cat, dc in d.groupby("category", sort=False):
         items = []
@@ -118,24 +143,37 @@ def main(argv=None):
             rnd.shuffle(opts)
             key[(cat, i)] = {str(j + 1): t for j, t in enumerate(opts)}
             b = briefs[(cat, i)]
-            items.append(
-                {
-                    "id": i,
-                    "intent": b["intent_name"],
-                    "product": b["product"],
-                    "need": b["need"],
-                    "options": {str(j + 1): t for j, t in enumerate(opts)},
-                }
-            )
+            item_of[(cat, i)] = {
+                "id": i,
+                "intent": b["intent_name"],
+                "product": b["product"],
+                "need": b["need"],
+                "options": {str(j + 1): t for j, t in enumerate(opts)},
+            }
+            items.append(item_of[(cat, i)])
         jobs += [(cat, json.dumps(part, ensure_ascii=False, indent=1)) for part in chunks(items, BATCH)]
     llm.expect(len(jobs), "Blind judge scoring the versions")
-    raws = llm.map("judge", [(system, us) for _, us in jobs])  # en paralelo con Bedrock
-    for (cat, _), raw in zip(jobs, raws, strict=False):
-        for it in parse_json(raw) or []:
-            for opt, sc in (it.get("scores") or {}).items():
-                t = key.get((cat, it.get("id")), {}).get(str(opt))
-                if t and isinstance(sc, dict) and sc:
-                    scores[(cat, it["id"], t)] = (sum(sc.values()) / len(sc), it.get("reason", ""))
+    for rnd_ in range(2):  # 2.ª vuelta: solo las fichas que se quedaron sin nota (respuesta rota o incompleta)
+        if rnd_:
+            judged = {(c, i) for c, i, _ in scores}
+            todo = [k for k in item_of if k not in judged]
+            if not todo or llm.pending:
+                break
+            print(f"[{STEP}] {len(todo)} fichas sin nota del juez: se vuelven a pedir")
+            jobs = [
+                (cat, json.dumps(part, ensure_ascii=False, indent=1))
+                for cat in dict.fromkeys(c for c, _ in todo)
+                for part in chunks([item_of[k] for k in todo if k[0] == cat], BATCH)
+            ]
+        raws = llm.map("judge", [(system, us) for _, us in jobs])  # en paralelo con Bedrock
+        for (cat, _), raw in zip(jobs, raws, strict=False):
+            for it in parse_json(raw) or []:
+                if not isinstance(it, dict):
+                    continue
+                for opt, sc in (it.get("scores") or {}).items():
+                    t = key.get((cat, it.get("id")), {}).get(str(opt))
+                    if t and isinstance(sc, dict) and sc:
+                        scores[(cat, it["id"], t)] = (sum(sc.values()) / len(sc), it.get("reason", ""))
     if llm.pending:
         print(
             f"[{STEP}] modo {llm.provider}: {len(llm.pending)} prompts pendientes en {out.base / 'manual' / 'pending'}"
@@ -150,7 +188,7 @@ def main(argv=None):
     chosen = []
     for cat, dc in d.groupby("category", sort=False):
         dc = dc[dc.ok].copy()
-        dc["opening"] = dc.text.str.lower().str.split().str[:2].str.join(" ")
+        dc["opening"] = [template(t, briefs[(cat, i)]) for t, i in zip(dc.text, dc.id, strict=True)]
         dc["shape"] = dc.intent + ":" + dc.s.astype(str)  # estructura de la familia de su intent
         dc["judge"] = dc.judge.fillna(0)
         count = {}
@@ -192,7 +230,7 @@ def main(argv=None):
                     "structure": pick.s,
                     "judge": round(pick.judge, 2),
                     "best_judge": round(pick.judge, 2),
-                    "opening": " ".join(pick.text.lower().split()[:2]),
+                    "opening": template(pick.text, briefs[(cat, i)]),
                     "n_versions": len(g),
                     "reason": f"[sin control: {pick.fails}] {pick.reason}",
                 }
@@ -204,7 +242,7 @@ def main(argv=None):
     for cat, g in ch.groupby("category"):
         print(
             f"[{STEP}] {cat}: {len(g)} preguntas · controles {d[d.category == cat].ok.mean():.0%} ok · "
-            f"nota media {g.judge.mean():.2f} · comienzos distintos {g.opening.nunique()}"
+            f"nota media {g.judge.mean():.2f} · plantillas distintas {g.opening.nunique()}"
         )
     llm.report(STEP)
 

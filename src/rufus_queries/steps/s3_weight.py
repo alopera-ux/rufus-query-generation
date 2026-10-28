@@ -17,6 +17,12 @@ Reglas automáticas (generales, sin listas por categoría):
    y nunca se mueve una keyword que el LLM puso en una rama (P..).
 4. Genéricas de rama (código P.., p. ej. "coffee", "tea"): su volumen se reparte entre las hojas de esa rama en
    proporción al volumen propio de cada hoja (a partes iguales si ninguna tiene volumen).
+6. Necesidad que es el nombre del propio nodo o de una rama que lo contiene ("tiki cat wet food" en
+   Wet > Canned: "wet" no es un atributo, es el nombre del producto) → G. Si es el nombre de OTRO nodo no se toca:
+   en las pruebas, la mitad de esos casos eran atributos legítimos ("oil cleanser", "serum body wash").
+5. Rama de una sola hoja (p. ej. "Earbud headphones" con solo "Sleep earbuds" dentro): rama y hoja son la misma
+   unidad, con el nombre de la rama. Sus genéricas ("earbuds") pasan a ser keywords de esa hoja, y no se convierten
+   en preguntas sobre la hoja concreta ("sleep earbuds"). Es una propiedad del árbol, sin parámetros.
 """
 
 import re
@@ -24,6 +30,7 @@ import re
 import pandas as pd
 
 from rufus_queries.lib.common import Config, Out, step_args
+from rufus_queries.steps.s2_classify import name_key
 
 STEP = "s3_weight"
 DEFAULT_LINE_NEEDS = ["diet", "zero", "zero sugar", "sugar free", "sugarfree", "sugar-free"]
@@ -38,6 +45,20 @@ def brand_families(brands, aliases: dict) -> dict:
     for b, a in (aliases or {}).items():
         fam[b] = a
     return fam
+
+
+def single_leaf_branches(nm: pd.DataFrame) -> dict:
+    """{(categoría, código de rama): (código de su única hoja, nombre de la rama más alta con solo esa hoja)}."""
+    out, best = {}, {}
+    for r in nm[~nm.is_leaf].itertuples():
+        kids = nm[(nm.category == r.category) & nm.is_leaf & nm.node_path.str.startswith(r.node_path + " > ")]
+        if len(kids) == 1:
+            leaf = kids.code.iloc[0]
+            out[(r.category, r.code)] = leaf
+            key = (r.category, leaf)
+            if key not in best or len(r.node_path) < len(best[key]):  # la rama más alta (ruta más corta)
+                best[key] = r.node_path
+    return {k: (leaf, best[(k[0], leaf)].split(" > ")[-1]) for k, leaf in out.items()}
 
 
 def main(argv=None):
@@ -74,6 +95,31 @@ def main(argv=None):
         )
     k.loc[m, ["intent", "need"]] = ["G", ""]
 
+    # 6 · necesidad = nombre del propio nodo o de una rama que lo contiene → G (es el nombre del producto)
+    nm_names = nm.assign(nk=nm.node_path.str.split(" > ").str[-1].map(name_key))
+    own_names = {}
+    for r in nm_names.itertuples():
+        own_names.setdefault((r.category, r.node_path), r.nk)
+
+    def names_own_node(r):
+        if not r.need or r.intent in ("", "G") or not r.node_path:
+            return False
+        key, parts = name_key(r.need), r.node_path.split(" > ")
+        return any(own_names.get((r.category, " > ".join(parts[:i]))) == key for i in range(len(parts), 1, -1))
+
+    m = pd.Series([names_own_node(r) for r in k.itertuples()], index=k.index, dtype=bool)
+    for r in k[m].itertuples():
+        fixes.append(
+            {
+                "rule": "necesidad = nombre del producto → G",
+                "category": r.category,
+                "keyword": r.keyword,
+                "before": f"{r.intent} {r.need}",
+                "after": "G",
+            }
+        )
+    k.loc[m, ["intent", "need"]] = ["G", ""]
+
     # 3 · anclas de marca para keywords que son solo la marca
     def is_brand_only(r):
         rest = re.sub(r"\s+", " ", r.keyword.replace(r.brand, " ")).strip() if r.brand else r.keyword
@@ -94,6 +140,27 @@ def main(argv=None):
                 {"rule": "ancla de marca", "category": r.category, "keyword": r.keyword, "before": r.code, "after": a}
             )
             k.loc[i, "code"], k.loc[i, "node_path"], k.loc[i, "is_leaf"] = a, path_of.get((r.category, a), ""), True
+
+    # 5 · ramas de una sola hoja: rama y hoja son la misma unidad
+    single = single_leaf_branches(nm)
+    for i, r in k[k.code.str.startswith("P")].iterrows():
+        hit = single.get((r.category, r.code))
+        if hit:
+            fixes.append(
+                {
+                    "rule": "rama de una hoja",
+                    "category": r.category,
+                    "keyword": r.keyword,
+                    "before": r.code,
+                    "after": hit[0],
+                }
+            )
+            k.loc[i, "code"], k.loc[i, "node_path"], k.loc[i, "is_leaf"] = (
+                hit[0],
+                path_of.get((r.category, hit[0])),
+                True,
+            )
+    unit_label = {(c, leaf): name for (c, _), (leaf, name) in single.items()}
 
     k["kw_type"] = [
         "brand_only" if b else ("generic" if i == "G" else ("intent" if i else "other"))
@@ -118,7 +185,9 @@ def main(argv=None):
             share = base / base.sum() if base.sum() > 0 else pd.Series(1 / len(kids), index=kids)
             add[kids] += vol * share
         df = leaves[["category", "code", "node_path"]].copy()
-        df["leaf_name"] = df.node_path.str.split(" > ").str[-1]
+        df["leaf_name"] = [
+            unit_label.get((cat, c), p.split(" > ")[-1]) for c, p in zip(df.code, df.node_path, strict=True)
+        ]
         df["n_kw"] = df.code.map(nkw).fillna(0).astype(int)
         df["own_volume"] = df.code.map(own).fillna(0)
         df["from_nodes"] = df.code.map(add).fillna(0)

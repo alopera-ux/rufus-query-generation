@@ -27,6 +27,7 @@ si no, la keyword se vuelve a preguntar.
 """
 
 import difflib
+import itertools
 import re
 import sys
 import time
@@ -174,17 +175,39 @@ def batched(df, n):
 
 
 def name_key(text: str) -> frozenset:
-    """Palabras de un nombre en singular y sin vacías: 'Juices' y 'juice' → {'juice'}."""
-    ws = re.findall(r"[a-z0-9]+", text.lower())
+    """Palabras de un nombre en singular y sin vacías: 'Juices' y 'juice' → {'juice'}; 'Over-ear' → {'overear'}."""
+    ws = re.findall(r"[a-z0-9]+", text.lower().replace("-", ""))
     return frozenset(w[:-1] if w.endswith("s") and len(w) > 3 else w for w in ws if w not in ("and", "of", "the"))
 
 
+def kw_words(keyword: str) -> frozenset:
+    """Palabras de una keyword en singular, más cada par de palabras seguidas juntas ("ear buds" → "earbud")."""
+    ws = re.findall(r"[a-z0-9]+", keyword.lower())
+    ws += [a + b for a, b in itertools.pairwise(ws)]
+    return frozenset(w[:-1] if w.endswith("s") and len(w) > 3 else w for w in ws)
+
+
+def names_other_node(keyword: str, code: str, known_leaf: str, path_of: dict) -> bool:
+    """True si la keyword nombra el producto del nodo code más que el de su leaf de Amazon: comparte más palabras
+    con el nombre de ese nodo que con el de la leaf ("wireless earbuds": Earbud headphones 1, Over-ear headphones 0)."""
+    p = path_of.get(code)
+    if not p:
+        return False
+    kw = kw_words(keyword)
+    return len(kw & name_key(p.split(" > ")[-1])) > len(kw & name_key(known_leaf.split(" > ")[-1]))
+
+
 def final_code(code: str, known_leaf: str, path_of: dict, code_of_path: dict, keyword: str = "") -> str:
-    """Nodo final de una keyword en 2b. Con leaf de keyword_leaves, la IA solo puede decir NX (o no responder, ??)
-    o subir a una rama que contiene esa leaf: una genérica como "coffee" o "juice" es de toda la rama, no de su
-    leaf más vista. Además, una keyword que es justo el nombre de una rama de esa leaf ("coffee" → Coffee,
-    "juice" → Juices) va a la rama aunque la IA no lo haya hecho. Cualquier otra respuesta se sustituye por la leaf."""
+    """Nodo final de una keyword en 2b. Con leaf de keyword_leaves, la IA solo puede:
+    - decir NX (o no responder, ??);
+    - subir a una rama que contiene esa leaf: una genérica como "coffee" o "juice" es de toda la rama;
+    - elegir otro nodo si la keyword nombra su producto más que el de la leaf ("wireless earbuds" con leaf
+      Over-ear headphones → Earbud headphones): Amazon a veces pone productos en una hoja que no es la suya.
+    Además, una keyword que es justo el nombre de una rama de esa leaf ("coffee" → Coffee, "juice" → Juices) va a
+    la rama aunque la IA no lo haya hecho. Cualquier otra respuesta se sustituye por la leaf."""
     if not known_leaf or code in ("NX", "??") or known_leaf.startswith(path_of.get(code, "\0") + " > "):
+        return code
+    if names_other_node(keyword, code, known_leaf, path_of):
         return code
     for c, p in path_of.items():
         if known_leaf.startswith(p + " > ") and keyword and name_key(p.split(" > ")[-1]) == name_key(keyword):
@@ -361,7 +384,13 @@ def main(argv=None):
                     "need": need,
                     "need_literal": (need == "" or need in r.keyword),
                     "brand": (brand or "").strip().lower(),
-                    "leaf_source": "keyword_leaves" if r.known_leaf else "ia",
+                    "leaf_source": (
+                        "ia"
+                        if not r.known_leaf
+                        else "ia_cambio"
+                        if code not in ("NX", "??") and not r.known_leaf.startswith(path_of.get(code, "\0"))
+                        else "keyword_leaves"
+                    ),
                 }
             )
     if maps:

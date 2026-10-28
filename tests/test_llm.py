@@ -208,3 +208,34 @@ def test_parallel_calls_all_retry_without_temperature(tmp_path, monkeypatch):
     out = llm.map("judge", [("s", str(i)) for i in range(4)])
     assert sorted(out) == ["a", "b", "c", "d"]
     assert llm.stats["failed"] == 0
+
+
+def test_bedrock_cached_map_needs_no_credentials(tmp_path, monkeypatch):
+    fake = FakeBedrock(["one", "two"])
+    monkeypatch.setattr(llm_mod, "boto3", fake_boto3(fake))
+    llm = make(tmp_path, "bedrock", workers=2)
+    llm.map("judge", [("s", "a"), ("s", "b")])  # llena la caché
+    again = make(tmp_path, "bedrock", workers=2)
+    monkeypatch.setattr(again, "_bedrock_client", lambda: (_ for _ in ()).throw(AssertionError("no credentials")))
+    assert sorted(again.map("judge", [("s", "a"), ("s", "b")])) == ["one", "two"]
+
+
+def test_bedrock_expired_session_stops_with_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm_mod, "boto3", fake_boto3(FakeBedrock([])))
+    llm = make(tmp_path, "bedrock", workers=2)
+
+    def expired():
+        raise client_error("ExpiredToken", "The security token included in the request is expired")
+
+    monkeypatch.setattr(llm, "_bedrock_client", expired)
+    with pytest.raises(SystemExit, match="MFA session has expired"):
+        llm.map("judge", [("s", "x"), ("s", "y")])
+
+
+def test_parse_json_salvages_items_after_extra_brace():
+    # caso real del juez (Sonnet 5.5): una llave de más tras un objeto hacía perder el lote entero
+    raw = '[\n{"id":"I07-1","scores":{"1":{"realism":5}}}}},\n{"id":"I08-4","scores":{"1":{"realism":4}}}\n]'
+    got = parse_json(raw)
+    assert [x["id"] for x in got if "id" in x] == ["I07-1", "I08-4"]
+    assert parse_json('[{"id": "a"}, {"id": "b"}]') == [{"id": "a"}, {"id": "b"}]
+    assert parse_json("[ nada válido ]") is None

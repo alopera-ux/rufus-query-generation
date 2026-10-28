@@ -7,7 +7,7 @@ For each item, FIRST reason in one sentence, THEN score each option 1-5 on:
 - single_need: the product plus the given need only, nothing added
 - product_seeking: makes the assistant recommend products
 - neutrality: no brand, no bias toward one brand (a device in a compatibility question is fine)
-- naturalness: fluent, short, casual
+- naturalness: fluent, short, casual, grammatical (a missing article such as "for closet" or "for table", or a doubled "for for", is at most 3)
 
 OUTPUT: only a JSON array, one object per item:
 [{"id": "...", "reason": "...", "scores": {"1": {"realism": n, "single_need": n, "product_seeking": n, "neutrality": n, "naturalness": n}, "2": {...}, ...}}]
